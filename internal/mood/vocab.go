@@ -64,7 +64,6 @@ var Synonyms = map[string]string{
 	"up-tempo":    "upbeat",
 	"uptempo":     "upbeat",
 	"energetic":   "driving",
-	"aggressive ": "aggressive",
 	"chill":       "mellow",
 	"chilled":     "mellow",
 	"somber":      "brooding",
@@ -130,6 +129,14 @@ func Validate() error {
 		}
 		if strings.ContainsAny(from, Separators) {
 			problems = append(problems, fmt.Sprintf("synonym key %q contains a separator", from))
+		}
+		// Canonical lowercases and trims before lookup, so a key that is not
+		// already in that form can never match and is silently dead. One such
+		// entry ("aggressive " with a trailing space) shipped and was only caught
+		// because the plugin logged a synonym count one lower than expected.
+		if norm := strings.ToLower(strings.TrimSpace(from)); norm != from {
+			problems = append(problems, fmt.Sprintf(
+				"synonym key %q is not lowercase-trimmed, so Canonical can never match it", from))
 		}
 	}
 

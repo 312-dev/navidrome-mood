@@ -39,6 +39,14 @@ func TestValidateDetectsEachProblem(t *testing.T) {
 		"synonym shadows term": {
 			vocab: []string{"warm"}, syn: map[string]string{"warm": "warm"}, want: "both a vocabulary term and a synonym",
 		},
+		// Shipped once as "aggressive " and was dead: Canonical trims its input
+		// before lookup, so a padded key can never be reached.
+		"synonym key not trimmed": {
+			vocab: []string{"warm"}, syn: map[string]string{"toasty ": "warm"}, want: "can never match",
+		},
+		"synonym key not lowercase": {
+			vocab: []string{"warm"}, syn: map[string]string{"Toasty": "warm"}, want: "can never match",
+		},
 	}
 
 	for name, tc := range cases {
