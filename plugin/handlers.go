@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/navidrome/navidrome/plugins/pdk/go/host"
 	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
 	"github.com/navidrome/navidrome/plugins/pdk/go/scheduler"
 	"github.com/navidrome/navidrome/plugins/pdk/go/taskworker"
@@ -24,12 +25,26 @@ func (p *plugin) OnInit() error {
 	// into multiple moods and fragment that mood across the whole library while
 	// still looking like it worked. Refuse to load rather than write bad tags.
 	if err := mood.Validate(); err != nil {
-		pdk.Log(pdk.LogError, fmt.Sprintf("navidrome-mood: %v", err))
+		logf(pdk.LogError, "navidrome-mood: %v", err)
 		return err
 	}
-	pdk.Log(pdk.LogInfo, fmt.Sprintf(
-		"navidrome-mood ready: %d mood terms, %d synonyms",
-		len(mood.Vocabulary), len(mood.Synonyms)))
+	logf(pdk.LogInfo, "navidrome-mood ready: %d mood terms, %d synonyms",
+		len(mood.Vocabulary), len(mood.Synonyms))
+
+	// The self-test is diagnostic and opt-in, run here rather than on a queue so
+	// its output lands next to the load line where anyone debugging will look.
+	// Failure is logged but never fatal: a plugin that refuses to load because a
+	// diagnostic failed is worse than one that reports the diagnostic failing.
+	switch mode, _ := host.ConfigGet("selfTest"); mode {
+	case "read":
+		if err := runSelfTest(false); err != nil {
+			logf(pdk.LogError, "selftest: FAILED: %v", err)
+		}
+	case "write":
+		if err := runSelfTest(true); err != nil {
+			logf(pdk.LogError, "selftest: FAILED: %v", err)
+		}
+	}
 	return nil
 }
 

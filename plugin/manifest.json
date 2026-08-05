@@ -36,7 +36,10 @@
           "type": "string",
           "title": "LLM provider",
           "description": "Anthropic supports batch mode at half price. OpenAI-compatible covers OpenAI, OpenRouter, Groq, Together, DeepSeek and anything else exposing that API shape.",
-          "enum": ["anthropic", "openai-compatible"],
+          "enum": [
+            "anthropic",
+            "openai-compatible"
+          ],
           "default": "anthropic"
         },
         "apiKey": {
@@ -117,11 +120,18 @@
               "schedule": {
                 "type": "string",
                 "title": "Refresh",
-                "enum": ["hourly", "daily", "weekly", "manual"],
+                "enum": [
+                  "hourly",
+                  "daily",
+                  "weekly",
+                  "manual"
+                ],
                 "default": "daily"
               }
             },
-            "required": ["prompt"]
+            "required": [
+              "prompt"
+            ]
           },
           "default": []
         },
@@ -130,9 +140,23 @@
           "title": "Mood vocabulary override",
           "description": "Comma-separated. Leave blank to use the built-in set. Terms may not themselves contain a comma, semicolon or slash, because Navidrome splits tag values on those.",
           "default": ""
+        },
+        "selfTest": {
+          "type": "string",
+          "title": "Self test",
+          "description": "Diagnostic. \"read\" opens one FLAC through the library mount and reports its structure without writing. \"write\" additionally writes a marker tag, reads it back, then removes it and verifies the removal. Run this once after granting write access, before any real labelling.",
+          "enum": [
+            "off",
+            "read",
+            "write"
+          ],
+          "default": "off"
         }
       },
-      "required": ["provider", "apiKey"]
+      "required": [
+        "provider",
+        "apiKey"
+      ]
     },
     "uiSchema": {
       "type": "VerticalLayout",
@@ -141,13 +165,21 @@
           "type": "Group",
           "label": "Provider",
           "elements": [
-            { "type": "Control", "scope": "#/properties/provider" },
+            {
+              "type": "Control",
+              "scope": "#/properties/provider"
+            },
             {
               "type": "Control",
               "scope": "#/properties/apiKey",
-              "options": { "format": "password" }
+              "options": {
+                "format": "password"
+              }
             },
-            { "type": "Control", "scope": "#/properties/model" },
+            {
+              "type": "Control",
+              "scope": "#/properties/model"
+            },
             {
               "type": "Control",
               "scope": "#/properties/baseUrl",
@@ -155,7 +187,9 @@
                 "effect": "SHOW",
                 "condition": {
                   "scope": "#/properties/provider",
-                  "schema": { "const": "openai-compatible" }
+                  "schema": {
+                    "const": "openai-compatible"
+                  }
                 }
               }
             },
@@ -166,7 +200,9 @@
                 "effect": "SHOW",
                 "condition": {
                   "scope": "#/properties/provider",
-                  "schema": { "const": "anthropic" }
+                  "schema": {
+                    "const": "anthropic"
+                  }
                 }
               }
             }
@@ -176,29 +212,61 @@
           "type": "Group",
           "label": "Labelling",
           "elements": [
-            { "type": "Control", "scope": "#/properties/maxSpendUsd" },
-            { "type": "Control", "scope": "#/properties/skipTagged" },
-            { "type": "Control", "scope": "#/properties/dryRun" }
+            {
+              "type": "Control",
+              "scope": "#/properties/maxSpendUsd"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/skipTagged"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/dryRun"
+            }
           ]
         },
         {
           "type": "Group",
           "label": "Playlists",
-          "elements": [{ "type": "Control", "scope": "#/properties/playlists" }]
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/playlists"
+            }
+          ]
         },
         {
           "type": "Group",
           "label": "Progress",
           "elements": [
-            { "type": "Control", "scope": "#/properties/statusToken" },
-            { "type": "Control", "scope": "#/properties/relayUrl" },
-            { "type": "Control", "scope": "#/properties/sendTrackTitles" }
+            {
+              "type": "Control",
+              "scope": "#/properties/statusToken"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/relayUrl"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/sendTrackTitles"
+            }
           ]
         },
         {
           "type": "Group",
           "label": "Advanced",
-          "elements": [{ "type": "Control", "scope": "#/properties/vocabulary" }]
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/selfTest"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/vocabulary"
+            }
+          ]
         }
       ]
     }
