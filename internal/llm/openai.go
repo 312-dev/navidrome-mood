@@ -29,6 +29,10 @@ const defaultOpenAIBase = "https://api.openai.com/v1"
 
 func (o *OpenAICompatible) Name() string { return "openai-compatible" }
 
+// ModelID returns the configured model. There is no default: the right model
+// depends entirely on which server BaseURL points at.
+func (o *OpenAICompatible) ModelID() string { return o.Model }
+
 // SupportsBatch reports false because only OpenAI proper offers a discounted
 // batch endpoint, and this adapter cannot tell from a base URL whether the thing
 // behind it does. Claiming batch support and then failing would be worse than

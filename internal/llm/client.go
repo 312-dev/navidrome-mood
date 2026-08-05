@@ -113,6 +113,13 @@ type Result struct {
 type Provider interface {
 	// Name identifies the provider in errors shown to the user.
 	Name() string
+	// ModelID is the resolved model, with any default already applied.
+	//
+	// On the interface rather than recovered by a type switch elsewhere: a
+	// switch has to be taught about every implementation, and anything it does
+	// not recognise silently prices at nothing. Since pricing drives the spend
+	// cap, "silently unknown" is the one answer that must not be possible.
+	ModelID() string
 	// Label sends one batch and returns verdicts plus real usage.
 	Label(system string, tracks []Track) (*Result, error)
 	// SupportsBatch reports whether a discounted async batch API is available.

@@ -34,6 +34,9 @@ type Anthropic struct {
 
 func (a *Anthropic) Name() string { return "anthropic" }
 
+// ModelID returns the resolved model, applying the default.
+func (a *Anthropic) ModelID() string { return a.model() }
+
 // SupportsBatch reports true because Anthropic offers a 50%-off async batch API.
 // The synchronous path here is what the batch path submits; wiring the batch
 // endpoint itself is separate work.
