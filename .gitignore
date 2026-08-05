@@ -1,3 +1,5 @@
 /*.wasm
 /*.ndp
 /dist/
+/go.work
+/go.work.sum

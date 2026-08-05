@@ -1,0 +1,206 @@
+{
+  "name": "navidrome-mood",
+  "author": "312.dev",
+  "version": "0.1.0",
+  "description": "Labels your library by mood with an LLM and writes real MOOD tags into the files, so smart playlists can filter on feeling. Also keeps natural-language playlists refreshed on a schedule.",
+  "website": "https://mood.312.dev",
+  "permissions": {
+    "http": {
+      "reason": "Send track metadata to the LLM provider you configure, and optionally post progress to a status endpoint you choose. No requiredHosts is declared, so any public host you point it at works while loopback and private addresses stay blocked."
+    },
+    "library": {
+      "reason": "Read and write MOOD tags directly in your audio files. Nothing else in the file is modified: audio bytes are never decoded, re-encoded, or moved, and the write is refused if the STREAMINFO checksum block would change.",
+      "filesystem": true
+    },
+    "kvstore": {
+      "reason": "Remember which tracks are already labelled, the free-form descriptors behind each tag, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought."
+    },
+    "scheduler": {
+      "reason": "Poll the provider's batch API until results are ready, and refresh prompted playlists on the interval you set."
+    },
+    "taskqueue": {
+      "reason": "Run labelling as resumable background work. Each plugin invocation is capped at 30 seconds by Navidrome, so a whole-library pass has to be many small tasks rather than one long one."
+    },
+    "subsonicapi": {
+      "reason": "Enumerate tracks to label, read your curated playlists as examples of your own mood vocabulary, and create the playlists you describe."
+    },
+    "users": {
+      "reason": "Required by Navidrome in order to call the Subsonic API on behalf of an admin user."
+    }
+  },
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "title": "LLM provider",
+          "description": "Anthropic supports batch mode at half price. OpenAI-compatible covers OpenAI, OpenRouter, Groq, Together, DeepSeek and anything else exposing that API shape.",
+          "enum": ["anthropic", "openai-compatible"],
+          "default": "anthropic"
+        },
+        "apiKey": {
+          "type": "string",
+          "title": "API key"
+        },
+        "model": {
+          "type": "string",
+          "title": "Model",
+          "description": "Leave blank for the provider's sensible default.",
+          "default": ""
+        },
+        "baseUrl": {
+          "type": "string",
+          "title": "Base URL",
+          "description": "Only for OpenAI-compatible providers, e.g. https://openrouter.ai/api/v1",
+          "default": ""
+        },
+        "batchMode": {
+          "type": "boolean",
+          "title": "Use batch API where available",
+          "description": "Roughly half the cost, but results arrive over minutes to hours rather than immediately.",
+          "default": true
+        },
+        "maxSpendUsd": {
+          "type": "number",
+          "title": "Spend limit (USD)",
+          "description": "Hard cap. Real usage is tracked from each response and labelling stops when the cap is reached, so this is a guarantee rather than an estimate.",
+          "default": 25,
+          "minimum": 0
+        },
+        "skipTagged": {
+          "type": "boolean",
+          "title": "Skip tracks that already have a MOOD tag",
+          "description": "Leaves tags written by Picard, beets or anything else alone. Turn off to relabel everything.",
+          "default": true
+        },
+        "dryRun": {
+          "type": "boolean",
+          "title": "Dry run",
+          "description": "Label and report, but never write to a file. Recommended for the first pass.",
+          "default": false
+        },
+        "statusToken": {
+          "type": "string",
+          "title": "Status token",
+          "description": "Optional. Generate one at the plugin website to watch progress in a browser. Leave blank and the plugin sends nothing at all.",
+          "default": ""
+        },
+        "relayUrl": {
+          "type": "string",
+          "title": "Status endpoint",
+          "description": "Override where status is posted. Point it at your own relay, an ntfy topic, or any webhook.",
+          "default": "https://mood.312.dev"
+        },
+        "sendTrackTitles": {
+          "type": "boolean",
+          "title": "Include track titles in status updates",
+          "description": "Off by default, so only counts and cost leave your server.",
+          "default": false
+        },
+        "playlists": {
+          "type": "array",
+          "title": "Prompted playlists",
+          "description": "Describe a playlist in plain language and it is kept refreshed. The model writes smart-playlist rules, so between refreshes Navidrome re-evaluates them continuously at no cost.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "title": "Describe it",
+                "examples": [
+                  "rainy sunday morning, reflective but not sad",
+                  "a different mood every day",
+                  "loud 90s guitars I haven't played in a year"
+                ]
+              },
+              "schedule": {
+                "type": "string",
+                "title": "Refresh",
+                "enum": ["hourly", "daily", "weekly", "manual"],
+                "default": "daily"
+              }
+            },
+            "required": ["prompt"]
+          },
+          "default": []
+        },
+        "vocabulary": {
+          "type": "string",
+          "title": "Mood vocabulary override",
+          "description": "Comma-separated. Leave blank to use the built-in set. Terms may not themselves contain a comma, semicolon or slash, because Navidrome splits tag values on those.",
+          "default": ""
+        }
+      },
+      "required": ["provider", "apiKey"]
+    },
+    "uiSchema": {
+      "type": "VerticalLayout",
+      "elements": [
+        {
+          "type": "Group",
+          "label": "Provider",
+          "elements": [
+            { "type": "Control", "scope": "#/properties/provider" },
+            {
+              "type": "Control",
+              "scope": "#/properties/apiKey",
+              "options": { "format": "password" }
+            },
+            { "type": "Control", "scope": "#/properties/model" },
+            {
+              "type": "Control",
+              "scope": "#/properties/baseUrl",
+              "rule": {
+                "effect": "SHOW",
+                "condition": {
+                  "scope": "#/properties/provider",
+                  "schema": { "const": "openai-compatible" }
+                }
+              }
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/batchMode",
+              "rule": {
+                "effect": "SHOW",
+                "condition": {
+                  "scope": "#/properties/provider",
+                  "schema": { "const": "anthropic" }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Labelling",
+          "elements": [
+            { "type": "Control", "scope": "#/properties/maxSpendUsd" },
+            { "type": "Control", "scope": "#/properties/skipTagged" },
+            { "type": "Control", "scope": "#/properties/dryRun" }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Playlists",
+          "elements": [{ "type": "Control", "scope": "#/properties/playlists" }]
+        },
+        {
+          "type": "Group",
+          "label": "Progress",
+          "elements": [
+            { "type": "Control", "scope": "#/properties/statusToken" },
+            { "type": "Control", "scope": "#/properties/relayUrl" },
+            { "type": "Control", "scope": "#/properties/sendTrackTitles" }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Advanced",
+          "elements": [{ "type": "Control", "scope": "#/properties/vocabulary" }]
+        }
+      ]
+    }
+  }
+}
