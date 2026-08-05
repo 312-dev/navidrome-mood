@@ -32,8 +32,10 @@ z.write('$(WASM)','plugin.wasm'); \
 z.close()"
 	@echo "built $@ ($$(wc -c < $@) bytes)"
 
-# check is what CI runs and what should pass before any commit.
-check: fmt vet test
+# check is what CI runs and what should pass before any commit. It must not
+# modify anything: a check that rewrites your files and then fails because it
+# rewrote them is useless locally and confusing in CI.
+check: fmt-check vet test
 
 test:
 	$(GO) test ./... -count=1
@@ -41,8 +43,15 @@ test:
 vet:
 	$(GO) vet ./...
 
+# fmt rewrites; fmt-check only reports. Keep them separate.
 fmt:
-	@test -z "$$($(GO) fmt ./...)" || (echo "gofmt made changes; commit them" && exit 1)
+	@gofmt -l -w .
+
+fmt-check:
+	@out=$$(gofmt -l .); \
+	if [ -n "$$out" ]; then \
+		echo "these files need gofmt (run 'make fmt'):"; echo "$$out"; exit 1; \
+	fi
 
 clean:
 	rm -rf $(DIST)
