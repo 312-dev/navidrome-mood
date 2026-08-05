@@ -3,7 +3,7 @@
   "author": "312.dev",
   "version": "0.1.0",
   "description": "Labels your library by mood with an LLM and writes real MOOD tags into the files, so smart playlists can filter on feeling. Also keeps natural-language playlists refreshed on a schedule.",
-  "website": "https://mood.312.dev",
+  "website": "https://navidrome-mood.312.dev",
   "permissions": {
     "http": {
       "reason": "Send track metadata to the LLM provider you configure, and optionally post progress to a status endpoint you choose. No requiredHosts is declared, so any public host you point it at works while loopback and private addresses stay blocked."
@@ -90,7 +90,7 @@
           "type": "string",
           "title": "Status endpoint",
           "description": "Override where status is posted. Point it at your own relay, an ntfy topic, or any webhook.",
-          "default": "https://mood.312.dev"
+          "default": "https://navidrome-mood.312.dev"
         },
         "sendTrackTitles": {
           "type": "boolean",

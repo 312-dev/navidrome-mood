@@ -100,6 +100,29 @@ func TestSubsonicAPIDeclaresUsers(t *testing.T) {
 	}
 }
 
+// manifest.website is the one clickable link Navidrome renders on the plugin's
+// detail page. Someone who installed navidrome-mood.ndp clicks it and must land
+// somewhere unmistakably the same project, so the host has to track the plugin
+// name rather than drift into something shorter and cleverer.
+func TestWebsiteAndRelayMatchThePluginName(t *testing.T) {
+	m := loadManifest(t)
+	name, _ := m["name"].(string)
+	if name == "" {
+		t.Fatal("manifest has no name")
+	}
+	wantHost := "https://" + name + ".312.dev"
+
+	if got, _ := m["website"].(string); got != wantHost {
+		t.Errorf("website = %q, want %q", got, wantHost)
+	}
+
+	props := m["config"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)
+	relay := props["relayUrl"].(map[string]any)["default"]
+	if relay != wantHost {
+		t.Errorf("relayUrl default = %v, want %q", relay, wantHost)
+	}
+}
+
 // The vocabulary override help text promises terms cannot contain a separator.
 // Keep the manifest and the code telling the same story.
 func TestManifestDocumentsSeparatorConstraint(t *testing.T) {
