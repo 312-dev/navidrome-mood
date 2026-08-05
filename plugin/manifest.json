@@ -151,6 +151,25 @@
             "write"
           ],
           "default": "off"
+        },
+        "run": {
+          "type": "string",
+          "title": "Run labelling",
+          "description": "\"sample\" labels 20 tracks spread across the library so you can judge the labels before paying for the whole thing. \"all\" labels everything still missing a MOOD tag. Work is queued and resumes after a restart; setting this back to \"off\" does not cancel work already queued.",
+          "enum": [
+            "off",
+            "sample",
+            "all"
+          ],
+          "default": "off"
+        },
+        "batchSize": {
+          "type": "integer",
+          "title": "Tracks per request",
+          "description": "Bounded by Navidrome's 30 second per-invocation limit, not by the provider: one task must finish a whole request inside that window. Lower this if you see max_tokens truncation.",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 60
         }
       },
       "required": [
@@ -214,6 +233,10 @@
           "elements": [
             {
               "type": "Control",
+              "scope": "#/properties/run"
+            },
+            {
+              "type": "Control",
               "scope": "#/properties/maxSpendUsd"
             },
             {
@@ -223,6 +246,10 @@
             {
               "type": "Control",
               "scope": "#/properties/dryRun"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/batchSize"
             }
           ]
         },

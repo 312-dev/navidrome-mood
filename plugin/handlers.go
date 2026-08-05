@@ -45,6 +45,16 @@ func (p *plugin) OnInit() error {
 			logf(pdk.LogError, "selftest: FAILED: %v", err)
 		}
 	}
+
+	// Starting a run from OnInit works because Navidrome reloads the plugin on
+	// every config save, so flipping `run` takes effect immediately. It also
+	// means this fires on EVERY save, which is what the pending-batch guard in
+	// startRun is for.
+	if mode, _ := host.ConfigGet("run"); mode == "sample" || mode == "all" {
+		if err := startRun(mode); err != nil {
+			logf(pdk.LogError, "run: FAILED to start: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -53,8 +63,7 @@ func (p *plugin) OnInit() error {
 func (p *plugin) OnTaskExecute(req taskworker.TaskExecuteRequest) (string, error) {
 	switch req.QueueName {
 	case queueLabel:
-		return "", fmt.Errorf("not implemented: labelling batch %s (attempt %d)",
-			req.TaskID, req.Attempt)
+		return executeBatch(req.Payload)
 	default:
 		return "", fmt.Errorf("unknown queue %q", req.QueueName)
 	}
