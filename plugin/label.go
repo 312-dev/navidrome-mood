@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/navidrome/navidrome/plugins/pdk/go/host"
 	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
@@ -48,13 +49,55 @@ func ensureQueue() error {
 	})
 }
 
-// syncNew queues anything in the library that has no MOOD tag yet.
+// syncNew queues only files this plugin has never seen.
 //
-// This is the steady state, not the bulk pass: newly added music gets labelled
-// without anyone touching a setting. Runs from the scheduler, so it keeps working
-// while nobody is looking at the plugin page.
+// The check must be cheap enough to run every few minutes, because that is what
+// makes it behave like "label on ingest" rather than "label eventually". Queuing
+// everything and letting each task skip the tagged ones would mean re-reading
+// metadata from ~9,200 files on every poll to discover that nothing changed.
+//
+// So: one directory walk for paths, ONE KVStoreList call for what is already
+// known, and a set difference. No file is opened unless it is actually new.
 func syncNew() error {
-	return startRun("all")
+	pending, err := readInt(keyPending)
+	if err != nil {
+		return err
+	}
+	if pending > 0 {
+		return nil // a run is already in flight; adding to it helps nobody
+	}
+
+	t, err := newFileTagger()
+	if err != nil {
+		return err
+	}
+	root := t.mounts[0]
+
+	paths, _, err := library.ListFiles(os.DirFS(root), root)
+	if err != nil {
+		return err
+	}
+
+	known, err := host.KVStoreList(runner.RecordPrefix)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(known))
+	for _, k := range known {
+		seen[strings.TrimPrefix(k, runner.RecordPrefix)] = true
+	}
+
+	var fresh []string
+	for _, p := range paths {
+		if !seen[p] {
+			fresh = append(fresh, p)
+		}
+	}
+	if len(fresh) == 0 {
+		return nil // nothing new; the whole poll cost one walk and one list
+	}
+	logf(pdk.LogInfo, "auto-sync: %d new file(s) since last pass", len(fresh))
+	return enqueue(fresh)
 }
 
 // startRun enumerates the library and enqueues labelling work.
@@ -99,8 +142,12 @@ func startRun(mode string) error {
 		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(paths))
 	}
 
-	size := configInt("batchSize", defaultBatchSize)
+	return enqueue(paths)
+}
 
+// enqueue splits paths into batches and queues them.
+func enqueue(paths []string) error {
+	size := configInt("batchSize", defaultBatchSize)
 	var queued int
 	for i := 0; i < len(paths); i += size {
 		end := i + size
@@ -119,7 +166,7 @@ func startRun(mode string) error {
 	if err := writeInt(keyPending, queued); err != nil {
 		return err
 	}
-	logf(pdk.LogInfo, "run: queued %d batches of up to %d (%d files)", queued, size, len(paths))
+	logf(pdk.LogInfo, "queued %d batches of up to %d (%d files)", queued, size, len(paths))
 	return nil
 }
 

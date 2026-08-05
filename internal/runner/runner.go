@@ -85,7 +85,11 @@ type Runner struct {
 	Discounted bool
 }
 
-func recordKey(id string) string { return "track:" + id }
+// RecordPrefix is the kvstore key prefix for per-track records. Exported so the
+// incremental sync can list known tracks in one call instead of probing per file.
+const RecordPrefix = "track:"
+
+func recordKey(id string) string { return RecordPrefix + id }
 
 // Process labels one batch and writes tags.
 //

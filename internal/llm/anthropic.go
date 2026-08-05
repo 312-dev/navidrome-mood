@@ -217,7 +217,10 @@ func labelSchema() json.RawMessage {
           "moods":     {"type": "array", "minItems": 2, "maxItems": 4,
                         "items": {"type": "string"},
                         "description": "Short lowercase feeling descriptors."},
-          "times":     {"type": "array", "items": {"type": "string"}}
+          "times":     {"type": "array",
+                        "items": {"type": "string",
+                                  "enum": ["early morning","morning","midday","afternoon",
+                                           "golden hour","evening","late night"]}}
         },
         "required": ["id","energy","valence","intensity","organic","moods"]
       }

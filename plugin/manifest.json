@@ -174,14 +174,14 @@
         "autoSync": {
           "type": "boolean",
           "title": "Keep new music labelled",
-          "description": "Checks the library on a schedule and labels anything that has no MOOD tag yet, so music you add later is labelled without you doing anything. Skips everything already tagged, so it costs nothing when there is nothing new.",
+          "description": "Labels music you add later, without you touching anything. Checks every 15 minutes by default; a check costs one directory listing when nothing is new, so it is close to labelling on ingest. Navidrome offers plugins no scan-completed hook, so polling is the only mechanism available.",
           "default": true
         },
         "autoSyncCron": {
           "type": "string",
           "title": "Schedule",
-          "description": "Cron expression. Default is 3am nightly.",
-          "default": "0 3 * * *"
+          "description": "Cron expression. Default is every 15 minutes.",
+          "default": "*/15 * * * *"
         }
       },
       "required": [

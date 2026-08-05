@@ -21,9 +21,11 @@ const (
 	// on each load replaces the schedule rather than accumulating copies.
 	scheduleSync = "sync-new"
 
-	// Nightly by default. Frequent enough that new music is labelled by morning,
-	// rare enough that a library nobody is adding to costs nothing.
-	defaultSyncCron = "0 3 * * *"
+	// Every 15 minutes, which is as close to "on ingest" as a plugin can get:
+	// Navidrome exposes no scan-completed hook, so polling is the only mechanism.
+	// Affordable because syncNew costs one directory walk and one KVStoreList
+	// when nothing has changed - it opens no files unless something is new.
+	defaultSyncCron = "*/15 * * * *"
 )
 
 // OnInit runs once when the plugin is loaded - notably NOT on hot reload, so it
