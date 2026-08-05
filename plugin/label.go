@@ -30,6 +30,33 @@ const (
 	defaultBatchSize = 20
 )
 
+// ensureQueue registers the label queue and its worker.
+//
+// Must run on EVERY load, not only when a run starts. Queue creation is what
+// subscribes a worker to the queue, and the queue's tasks are durable in SQLite -
+// so a plugin that reloads without calling this leaves queued work with nothing
+// watching it. That bug parked a real batch: the dispatcher polls every 5s, and
+// it sat pending for minutes because startRun returned at the already-queued
+// guard before ever reaching the create call.
+func ensureQueue() error {
+	return host.TaskCreateQueue(queueLabel, host.QueueConfig{
+		Concurrency: 1, // one LLM request at a time; the cap is spend, not speed
+		MaxRetries:  3,
+		BackoffMs:   5_000,
+		DelayMs:     500,
+		RetentionMs: 24 * 60 * 60 * 1000,
+	})
+}
+
+// syncNew queues anything in the library that has no MOOD tag yet.
+//
+// This is the steady state, not the bulk pass: newly added music gets labelled
+// without anyone touching a setting. Runs from the scheduler, so it keeps working
+// while nobody is looking at the plugin page.
+func syncNew() error {
+	return startRun("all")
+}
+
 // startRun enumerates the library and enqueues labelling work.
 //
 // Enumeration lists paths only. Reading metadata for ~9,200 files takes over a
@@ -73,15 +100,6 @@ func startRun(mode string) error {
 	}
 
 	size := configInt("batchSize", defaultBatchSize)
-	if err := host.TaskCreateQueue(queueLabel, host.QueueConfig{
-		Concurrency: 1, // one LLM request at a time; the cap is spend, not speed
-		MaxRetries:  3,
-		BackoffMs:   5_000,
-		DelayMs:     500,
-		RetentionMs: 24 * 60 * 60 * 1000,
-	}); err != nil {
-		return fmt.Errorf("creating queue: %w", err)
-	}
 
 	var queued int
 	for i := 0; i < len(paths); i += size {

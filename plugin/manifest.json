@@ -170,6 +170,18 @@
           "default": 20,
           "minimum": 1,
           "maximum": 60
+        },
+        "autoSync": {
+          "type": "boolean",
+          "title": "Keep new music labelled",
+          "description": "Checks the library on a schedule and labels anything that has no MOOD tag yet, so music you add later is labelled without you doing anything. Skips everything already tagged, so it costs nothing when there is nothing new.",
+          "default": true
+        },
+        "autoSyncCron": {
+          "type": "string",
+          "title": "Schedule",
+          "description": "Cron expression. Default is 3am nightly.",
+          "default": "0 3 * * *"
         }
       },
       "required": [
@@ -250,6 +262,29 @@
             {
               "type": "Control",
               "scope": "#/properties/batchSize"
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Keeping up to date",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/autoSync"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/autoSyncCron",
+              "rule": {
+                "effect": "SHOW",
+                "condition": {
+                  "scope": "#/properties/autoSync",
+                  "schema": {
+                    "const": true
+                  }
+                }
+              }
             }
           ]
         },

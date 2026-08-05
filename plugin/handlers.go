@@ -16,6 +16,14 @@ import (
 // restart mid-pass.
 const (
 	queueLabel = "label"
+
+	// scheduleSync keeps newly added music labelled. Fixed ID so re-registering
+	// on each load replaces the schedule rather than accumulating copies.
+	scheduleSync = "sync-new"
+
+	// Nightly by default. Frequent enough that new music is labelled by morning,
+	// rare enough that a library nobody is adding to costs nothing.
+	defaultSyncCron = "0 3 * * *"
 )
 
 // OnInit runs once when the plugin is loaded - notably NOT on hot reload, so it
@@ -46,6 +54,19 @@ func (p *plugin) OnInit() error {
 		}
 	}
 
+	// The queue must exist on every load, independent of whether a run starts.
+	// See ensureQueue: skipping it strands durable tasks with no worker.
+	if err := ensureQueue(); err != nil {
+		logf(pdk.LogError, "could not register the task queue: %v", err)
+	}
+
+	// Keep newly added music labelled without anyone touching a setting. The
+	// schedule is idempotent: it enumerates, skips anything already tagged, and
+	// the pending guard stops it piling work on top of an in-flight run.
+	if err := configureAutoSync(); err != nil {
+		logf(pdk.LogWarn, "auto-sync: %v", err)
+	}
+
 	// Starting a run from OnInit works because Navidrome reloads the plugin on
 	// every config save, so flipping `run` takes effect immediately. It also
 	// means this fires on EVERY save, which is what the pending-batch guard in
@@ -69,8 +90,28 @@ func (p *plugin) OnTaskExecute(req taskworker.TaskExecuteRequest) (string, error
 	}
 }
 
-// OnCallback drives the batch poll loop and the prompted-playlist refresh.
+// OnCallback runs the scheduled incremental sync.
 func (p *plugin) OnCallback(req scheduler.SchedulerCallbackRequest) error {
-	return fmt.Errorf("not implemented: schedule %s (recurring=%v)",
-		req.ScheduleID, req.IsRecurring)
+	switch req.ScheduleID {
+	case scheduleSync:
+		logf(pdk.LogInfo, "auto-sync: checking for newly added tracks")
+		return syncNew()
+	default:
+		return fmt.Errorf("unknown schedule %q", req.ScheduleID)
+	}
+}
+
+// configureAutoSync installs or removes the recurring sync to match config.
+func configureAutoSync() error {
+	if !configBool("autoSync", true) {
+		// Cancelling an absent schedule is not an error worth surfacing.
+		_ = host.SchedulerCancelSchedule(scheduleSync)
+		return nil
+	}
+	cron, ok := host.ConfigGet("autoSyncCron")
+	if !ok || cron == "" {
+		cron = defaultSyncCron
+	}
+	_, err := host.SchedulerScheduleRecurring(cron, "", scheduleSync)
+	return err
 }
