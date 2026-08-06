@@ -34,8 +34,8 @@
       "properties": {
         "provider": {
           "type": "string",
-          "title": "LLM provider",
-          "description": "Anthropic supports batch mode at half price. OpenAI-compatible covers OpenAI, OpenRouter, Groq, Together, DeepSeek and anything else exposing that API shape.",
+          "title": "Who does the labelling",
+          "description": "Anthropic is the default and needs only an API key. OpenAI-compatible covers OpenAI, OpenRouter, Groq, Together, DeepSeek, and local servers like Ollama or LM Studio.",
           "enum": [
             "anthropic",
             "openai-compatible"
@@ -44,144 +44,120 @@
         },
         "apiKey": {
           "type": "string",
-          "title": "API key"
-        },
-        "model": {
-          "type": "string",
-          "title": "Model",
-          "description": "Leave blank for the provider's sensible default.",
-          "default": ""
-        },
-        "baseUrl": {
-          "type": "string",
-          "title": "Base URL",
-          "description": "Only for OpenAI-compatible providers, e.g. https://openrouter.ai/api/v1",
-          "default": ""
-        },
-        "batchMode": {
-          "type": "boolean",
-          "title": "Use batch API where available",
-          "description": "Roughly half the cost, but results arrive over minutes to hours rather than immediately.",
-          "default": true
+          "title": "API key",
+          "description": "Stored by Navidrome and sent only to the provider above."
         },
         "maxSpendUsd": {
           "type": "number",
-          "title": "Spend limit (USD)",
-          "description": "Hard cap. Real usage is tracked from each response and labelling stops when the cap is reached, so this is a guarantee rather than an estimate.",
-          "default": 25,
-          "minimum": 0
+          "title": "Most this run may cost (USD)",
+          "description": "A hard stop, not an estimate. Actual spend is measured from each reply and labelling halts when this is reached. A library of about 9,000 tracks costs roughly $15 with the default model.",
+          "default": 20,
+          "minimum": 0.01,
+          "maximum": 1000
         },
-        "skipTagged": {
-          "type": "boolean",
-          "title": "Skip tracks that already have a MOOD tag",
-          "description": "Leaves tags written by Picard, beets or anything else alone. Turn off to relabel everything.",
-          "default": true
+        "lifetimeCapUsd": {
+          "type": "number",
+          "title": "Most this plugin may EVER cost (USD)",
+          "description": "A ceiling across every run, which never resets. The per-run limit above starts fresh when you change the model or the limit, so this is what stops repeated runs adding up to a number you did not intend.",
+          "default": 100,
+          "minimum": 0.01,
+          "maximum": 10000
+        },
+        "run": {
+          "type": "string",
+          "title": "Label my library",
+          "description": "Start with 'sample': it labels 20 tracks from across your library for a few cents so you can see whether you like the results. 'everything' labels every track that has no mood yet. Work is queued and survives restarts, and setting this back to 'off' does not cancel work already queued.",
+          "enum": [
+            "off",
+            "sample",
+            "everything"
+          ],
+          "default": "off"
         },
         "dryRun": {
           "type": "boolean",
-          "title": "Dry run",
-          "description": "Label and report, but never write to a file. Recommended for the first pass.",
+          "title": "Preview only, do not change my files",
+          "description": "Labels are generated and saved, but nothing is written to your music files. Note this still costs the same to run, because the labels are still produced - it only protects the files, not your bill.",
           "default": false
+        },
+        "skipTagged": {
+          "type": "boolean",
+          "title": "Leave existing mood tags alone",
+          "description": "Skips any track that already has a mood, including ones written by Picard, beets or by hand. Turn off only if you want everything relabelled.",
+          "default": true
+        },
+        "autoSync": {
+          "type": "boolean",
+          "title": "Label new music automatically",
+          "description": "Checks for newly added tracks and labels them without you doing anything. A check costs nothing when there is nothing new, so this is safe to leave on.",
+          "default": true
+        },
+        "autoSyncCron": {
+          "type": "string",
+          "title": "How often to check",
+          "description": "Cron expression. The default checks every 15 minutes.",
+          "default": "*/15 * * * *"
         },
         "statusToken": {
           "type": "string",
-          "title": "Status token",
-          "description": "Optional. Generate one at the plugin website to watch progress in a browser. Leave blank and the plugin sends nothing at all.",
+          "title": "Progress page token",
+          "description": "Optional. Leave blank and this plugin sends nothing anywhere. Fill it in to watch progress in a browser; get a token from the plugin website.",
           "default": ""
         },
         "relayUrl": {
           "type": "string",
-          "title": "Status endpoint",
-          "description": "Override where status is posted. Point it at your own relay, an ntfy topic, or any webhook.",
+          "title": "Where to send progress",
+          "description": "Change this to use your own server, an ntfy topic, or any webhook.",
           "default": "https://navidrome-mood.312.dev"
         },
         "sendTrackTitles": {
           "type": "boolean",
-          "title": "Include track titles in status updates",
-          "description": "Off by default, so only counts and cost leave your server.",
+          "title": "Include track names in progress updates",
+          "description": "Off by default, so only counts and cost ever leave your server.",
           "default": false
         },
-        "playlists": {
-          "type": "array",
-          "title": "Prompted playlists",
-          "description": "Describe a playlist in plain language and it is kept refreshed. The model writes smart-playlist rules, so between refreshes Navidrome re-evaluates them continuously at no cost.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "prompt": {
-                "type": "string",
-                "title": "Describe it",
-                "examples": [
-                  "rainy sunday morning, reflective but not sad",
-                  "a different mood every day",
-                  "loud 90s guitars I haven't played in a year"
-                ]
-              },
-              "schedule": {
-                "type": "string",
-                "title": "Refresh",
-                "enum": [
-                  "hourly",
-                  "daily",
-                  "weekly",
-                  "manual"
-                ],
-                "default": "daily"
-              }
-            },
-            "required": [
-              "prompt"
-            ]
-          },
-          "default": []
+        "model": {
+          "type": "string",
+          "title": "Model",
+          "description": "Leave blank for a sensible default. Required for OpenAI-compatible providers.",
+          "default": ""
+        },
+        "baseUrl": {
+          "type": "string",
+          "title": "Server address",
+          "description": "For OpenAI-compatible providers, e.g. https://openrouter.ai/api/v1",
+          "default": ""
+        },
+        "batchSize": {
+          "type": "integer",
+          "title": "Tracks per request",
+          "description": "Lower this if labelling fails with a truncation message. Bounded by Navidrome's 30 second limit per plugin call, not by the provider.",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 60
+        },
+        "batchMode": {
+          "type": "boolean",
+          "title": "Use the cheaper batch API",
+          "description": "About half price, but results arrive over minutes to hours rather than immediately.",
+          "default": true
         },
         "vocabulary": {
           "type": "string",
-          "title": "Mood vocabulary override",
-          "description": "Comma-separated. Leave blank to use the built-in set. Terms may not themselves contain a comma, semicolon or slash, because Navidrome splits tag values on those.",
+          "title": "Custom mood words",
+          "description": "Comma separated. Leave blank for the built-in set of 60. Individual words may not contain a comma, semicolon or slash, because Navidrome splits tag values on those.",
           "default": ""
         },
         "selfTest": {
           "type": "string",
           "title": "Self test",
-          "description": "Diagnostic. \"read\" opens one FLAC through the library mount and reports its structure without writing. \"write\" additionally writes a marker tag, reads it back, then removes it and verifies the removal. Run this once after granting write access, before any real labelling.",
+          "description": "Diagnostic. 'read' opens one file and reports what it found. 'write' also writes a marker tag, reads it back, removes it and checks the removal. Useful if tagging is not working.",
           "enum": [
             "off",
             "read",
             "write"
           ],
           "default": "off"
-        },
-        "run": {
-          "type": "string",
-          "title": "Run labelling",
-          "description": "\"sample\" labels 20 tracks spread across the library so you can judge the labels before paying for the whole thing. \"all\" labels everything still missing a MOOD tag. Work is queued and resumes after a restart; setting this back to \"off\" does not cancel work already queued.",
-          "enum": [
-            "off",
-            "sample",
-            "all"
-          ],
-          "default": "off"
-        },
-        "batchSize": {
-          "type": "integer",
-          "title": "Tracks per request",
-          "description": "Bounded by Navidrome's 30 second per-invocation limit, not by the provider: one task must finish a whole request inside that window. Lower this if you see max_tokens truncation.",
-          "default": 20,
-          "minimum": 1,
-          "maximum": 60
-        },
-        "autoSync": {
-          "type": "boolean",
-          "title": "Keep new music labelled",
-          "description": "Labels music you add later, without you touching anything. Checks every 15 minutes by default; a check costs one directory listing when nothing is new, so it is close to labelling on ingest. Navidrome offers plugins no scan-completed hook, so polling is the only mechanism available.",
-          "default": true
-        },
-        "autoSyncCron": {
-          "type": "string",
-          "title": "Schedule",
-          "description": "Cron expression. Default is every 15 minutes.",
-          "default": "*/15 * * * *"
         }
       },
       "required": [
@@ -194,7 +170,7 @@
       "elements": [
         {
           "type": "Group",
-          "label": "Provider",
+          "label": "1. Choose who does the labelling",
           "elements": [
             {
               "type": "Control",
@@ -206,7 +182,86 @@
               "options": {
                 "format": "password"
               }
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "2. Set your limits",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/maxSpendUsd"
             },
+            {
+              "type": "Control",
+              "scope": "#/properties/lifetimeCapUsd"
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "3. Run it",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/run"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/dryRun"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/skipTagged"
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Keeping up to date",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/autoSync"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/autoSyncCron",
+              "rule": {
+                "effect": "SHOW",
+                "condition": {
+                  "scope": "#/properties/autoSync",
+                  "schema": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Watching progress (optional)",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/statusToken"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/relayUrl"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/sendTrackTitles"
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Advanced",
+          "elements": [
             {
               "type": "Control",
               "scope": "#/properties/model"
@@ -236,97 +291,18 @@
                   }
                 }
               }
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Labelling",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/run"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/maxSpendUsd"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/skipTagged"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/dryRun"
             },
             {
               "type": "Control",
               "scope": "#/properties/batchSize"
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Keeping up to date",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/autoSync"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/autoSyncCron",
-              "rule": {
-                "effect": "SHOW",
-                "condition": {
-                  "scope": "#/properties/autoSync",
-                  "schema": {
-                    "const": true
-                  }
-                }
-              }
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Playlists",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/playlists"
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Progress",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/statusToken"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/relayUrl"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/sendTrackTitles"
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Advanced",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/selfTest"
             },
             {
               "type": "Control",
               "scope": "#/properties/vocabulary"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/selfTest"
             }
           ]
         }

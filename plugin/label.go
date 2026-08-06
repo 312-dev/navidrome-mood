@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -59,6 +60,9 @@ func ensureQueue() error {
 // So: one directory walk for paths, ONE KVStoreList call for what is already
 // known, and a set difference. No file is opened unless it is actually new.
 func syncNew() error {
+	if r := haltedReason(); r != "" {
+		return nil // stay stopped until the user changes something
+	}
 	pending, err := readInt(keyPending)
 	if err != nil {
 		return err
@@ -106,6 +110,10 @@ func syncNew() error {
 // minute and this runs inside Navidrome's 30-second ceiling, so each task reads
 // metadata for its own batch instead.
 func startRun(mode string) error {
+	if r := haltedReason(); r != "" {
+		logf(pdk.LogWarn, "run: not starting, work is halted: %s", describeHalt(r))
+		return nil
+	}
 	pending, err := readInt(keyPending)
 	if err != nil {
 		return err
@@ -142,7 +150,33 @@ func startRun(mode string) error {
 		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(paths))
 	}
 
+	// Cost the run before committing to it. Refusing here is far cheaper than
+	// discovering the limit halfway through 460 batches.
+	provider, err := buildProvider()
+	if err != nil {
+		return err
+	}
+	lifetime, cap := lifetimeState()
+	if err := preflight(len(paths), provider.ModelID(),
+		configFloat("maxSpendUsd", 0), lifetime, cap); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+
 	return enqueue(paths)
+}
+
+// lifetimeState reads total spend and its ceiling.
+func lifetimeState() (spent, cap float64) {
+	cap = configFloat("lifetimeCapUsd", defaultLifetimeCap)
+	raw, ok, err := host.KVStoreGet(keyBudget)
+	if err != nil || !ok {
+		return 0, cap
+	}
+	var snap llm.Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return 0, cap
+	}
+	return snap.LifetimeUSD, cap
 }
 
 // enqueue splits paths into batches and queues them.
@@ -197,6 +231,8 @@ func executeBatch(payload []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	lifetime, cap := lifetimeState()
+	budget.SetLifetime(lifetime, cap)
 
 	skipTagged := configBool("skipTagged", true)
 	items := make([]runner.Item, 0, len(tracks))
@@ -221,13 +257,11 @@ func executeBatch(payload []byte) (string, error) {
 
 	out, procErr := r.Process(items)
 
-	// Persist the budget even on failure: those tokens were spent either way, and
-	// a cap that only counts successful batches is not counting money.
-	if budget != nil {
-		if err := saveBudget(budget); err != nil {
-			logf(pdk.LogWarn, "batch: could not persist budget: %v", err)
-		}
-	}
+	// Persist even on failure: those tokens were spent either way, and a cap that
+	// only counts successful batches is not counting money. If the write fails,
+	// persistSpend halts everything - a limit that cannot be saved is not a limit.
+	persistSpend(budget)
+	recordOutcome(out.Cost, out.Labelled)
 	decrement(keyPending)
 
 	summary := fmt.Sprintf("requested=%d skipped=%d labelled=%d written=%d unresolved=%d cost=$%.4f",
@@ -239,6 +273,16 @@ func executeBatch(payload []byte) (string, error) {
 			len(out.Unresolved), out.Unresolved)
 	}
 	if procErr != nil {
+		// Only surface an error the queue will retry when retrying could actually
+		// help. Every retry is another billable request, so a permanent failure
+		// re-run three times is triple the cost for an identical outcome.
+		if !llm.Retryable(procErr) {
+			logf(pdk.LogError, "batch failed permanently, not retrying: %v", procErr)
+			if isFatal(procErr) {
+				halt(fmt.Sprintf("%v", procErr))
+			}
+			return summary + " (permanent failure: " + procErr.Error() + ")", nil
+		}
 		return summary, procErr
 	}
 	logf(pdk.LogInfo, "batch: %s", summary)
@@ -355,4 +399,10 @@ func configFloat(key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+// isFatal reports failures that will recur for every remaining batch, so the
+// whole run should stop rather than failing 460 times in sequence.
+func isFatal(err error) bool {
+	return errors.Is(err, llm.ErrAuth) || errors.Is(err, llm.ErrBudgetExhausted)
 }

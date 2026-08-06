@@ -56,6 +56,10 @@ func (p *plugin) OnInit() error {
 		}
 	}
 
+	// A configuration change is the closest thing to "I have looked at this"
+	// available without a button, so it is what releases a halt.
+	clearHalt()
+
 	// The queue must exist on every load, independent of whether a run starts.
 	// See ensureQueue: skipping it strands durable tasks with no worker.
 	if err := ensureQueue(); err != nil {
@@ -73,7 +77,7 @@ func (p *plugin) OnInit() error {
 	// every config save, so flipping `run` takes effect immediately. It also
 	// means this fires on EVERY save, which is what the pending-batch guard in
 	// startRun is for.
-	if mode, _ := host.ConfigGet("run"); mode == "sample" || mode == "all" {
+	if mode, _ := host.ConfigGet("run"); mode == "sample" || mode == "everything" {
 		if err := startRun(mode); err != nil {
 			logf(pdk.LogError, "run: FAILED to start: %v", err)
 		}

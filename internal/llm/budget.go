@@ -34,6 +34,14 @@ type Budget struct {
 	spent    float64
 	usage    Usage
 	batches  int
+
+	// lifetime is every dollar this plugin has EVER spent, across model changes,
+	// limit changes and restarts. It exists because `spent` legitimately resets
+	// when the configuration it describes changes - and without a figure that
+	// never resets, someone could burn an unbounded amount by nudging the model
+	// dropdown between runs. LifetimeCap bounds it.
+	lifetime    float64
+	lifetimeCap float64
 }
 
 // NewBudget fails immediately on an unpriceable model, so the error surfaces at
@@ -48,12 +56,32 @@ func NewBudget(model string, limitUSD float64) (*Budget, error) {
 	return &Budget{model: model, limitUSD: limitUSD}, nil
 }
 
+// SetLifetime restores the never-resetting total and its ceiling.
+func (b *Budget) SetLifetime(spent, cap float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lifetime, b.lifetimeCap = spent, cap
+}
+
+// Lifetime returns total spend across every run and configuration.
+func (b *Budget) Lifetime() float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lifetime
+}
+
 // CanAfford reports whether a request projected to cost projectedUSD may proceed.
 // A zero limit means unlimited, which is why it is not the default in the
 // manifest.
 func (b *Budget) CanAfford(projectedUSD float64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// The lifetime ceiling is checked first and cannot be escaped by changing
+	// the model or the per-run limit.
+	if b.lifetimeCap > 0 && b.lifetime+projectedUSD > b.lifetimeCap {
+		return fmt.Errorf("%w: lifetime spend $%.4f of $%.2f ceiling",
+			ErrBudgetExhausted, b.lifetime, b.lifetimeCap)
+	}
 	if b.limitUSD == 0 {
 		return nil
 	}
@@ -78,6 +106,7 @@ func (b *Budget) Record(u Usage, discounted bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spent += cost
+	b.lifetime += cost
 	b.usage = b.usage.Add(u)
 	b.batches++
 	return nil
@@ -111,6 +140,8 @@ type Snapshot struct {
 	SpentUSD float64 `json:"spentUsd"`
 	Usage    Usage   `json:"usage"`
 	Batches  int     `json:"batches"`
+	// LifetimeUSD is carried across every reset path on purpose.
+	LifetimeUSD float64 `json:"lifetimeUsd"`
 }
 
 func (b *Budget) Snapshot() Snapshot {
@@ -119,6 +150,7 @@ func (b *Budget) Snapshot() Snapshot {
 	return Snapshot{
 		Model: b.model, LimitUSD: b.limitUSD,
 		SpentUSD: b.spent, Usage: b.usage, Batches: b.batches,
+		LifetimeUSD: b.lifetime,
 	}
 }
 
@@ -131,5 +163,6 @@ func Restore(s Snapshot) (*Budget, error) {
 		return nil, err
 	}
 	b.spent, b.usage, b.batches = s.SpentUSD, s.Usage, s.Batches
+	b.lifetime = s.LifetimeUSD
 	return b, nil
 }

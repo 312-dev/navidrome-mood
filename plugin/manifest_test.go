@@ -136,3 +136,93 @@ func TestManifestDocumentsSeparatorConstraint(t *testing.T) {
 		}
 	}
 }
+
+// Config enums and the code that switches on them must not drift apart. Renaming
+// a value in the manifest without changing the switch produces a dropdown that
+// silently does nothing - no error, no log line, just a setting that has no
+// effect. Caught here rather than by a user wondering why nothing happened.
+func TestConfigEnumsMatchTheCode(t *testing.T) {
+	m := loadManifest(t)
+	props := m["config"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)
+
+	enumOf := func(field string) []string {
+		spec, ok := props[field].(map[string]any)
+		if !ok {
+			t.Fatalf("no such config field: %s", field)
+		}
+		raw, ok := spec["enum"].([]any)
+		if !ok {
+			t.Fatalf("%s has no enum", field)
+		}
+		var out []string
+		for _, v := range raw {
+			out = append(out, v.(string))
+		}
+		return out
+	}
+
+	// Every value the code branches on, and nothing else.
+	for field, handled := range map[string][]string{
+		"run":      {"off", "sample", "everything"},
+		"selfTest": {"off", "read", "write"},
+		"provider": {"anthropic", "openai-compatible"},
+	} {
+		got := enumOf(field)
+		if len(got) != len(handled) {
+			t.Errorf("%s: manifest offers %v, code handles %v", field, got, handled)
+			continue
+		}
+		for i := range handled {
+			if got[i] != handled[i] {
+				t.Errorf("%s: manifest offers %v, code handles %v", field, got, handled)
+				break
+			}
+		}
+	}
+
+	// Spend limits must have a floor. A zero or absent minimum lets someone save
+	// an empty field and end up with no limit at all.
+	for _, field := range []string{"maxSpendUsd", "lifetimeCapUsd"} {
+		spec := props[field].(map[string]any)
+		min, ok := spec["minimum"].(float64)
+		if !ok || min <= 0 {
+			t.Errorf("%s has no positive minimum, so it can be set to unlimited by clearing it", field)
+		}
+		if _, ok := spec["default"].(float64); !ok {
+			t.Errorf("%s has no default", field)
+		}
+	}
+}
+
+// Every property must appear somewhere in the uiSchema, or it is unreachable in
+// the form and might as well not exist.
+func TestEveryConfigFieldIsReachableInTheForm(t *testing.T) {
+	m := loadManifest(t)
+	cfg := m["config"].(map[string]any)
+	props := cfg["schema"].(map[string]any)["properties"].(map[string]any)
+
+	seen := map[string]bool{}
+	var walk func(any)
+	walk = func(n any) {
+		switch v := n.(type) {
+		case map[string]any:
+			if s, ok := v["scope"].(string); ok {
+				seen[strings.TrimPrefix(s, "#/properties/")] = true
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(cfg["uiSchema"])
+
+	for name := range props {
+		if !seen[name] {
+			t.Errorf("config field %q is not in the uiSchema, so nobody can set it", name)
+		}
+	}
+}
