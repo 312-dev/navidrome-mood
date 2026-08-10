@@ -282,6 +282,7 @@ func executeBatch(payload []byte) (string, error) {
 	// that matter, and only the stored record says which of the two it is.
 	// Deciding here would filter those tracks out before the runner could tell.
 	skipTagged := configBool("skipTagged", true)
+	dryRun := configBool("dryRun", false)
 	items := make([]runner.Item, 0, len(tracks))
 	for _, tr := range tracks {
 		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path})
@@ -295,7 +296,7 @@ func executeBatch(payload []byte) (string, error) {
 		System:   buildPrompt(),
 		Opts: runner.Options{
 			SkipTagged: skipTagged,
-			DryRun:     configBool("dryRun", false),
+			DryRun:     dryRun,
 		},
 	}
 
@@ -321,6 +322,18 @@ func executeBatch(payload []byte) (string, error) {
 		// answered and the answer was out of range. Naming it is what makes a
 		// provider that consistently ignores the schema visible.
 		logf(pdk.LogWarn, "batch: rejected the label for %s: %s", id, why)
+	}
+	if out.Labelled > 0 && out.Written == 0 {
+		// Paying for labels and writing none is the failure that hides inside a
+		// successful-looking summary, because every count except one is healthy.
+		// It happened on a real install: a library reached $24.98 of a $25 limit
+		// with preview mode on and never wrote a tag. Say the two likely causes
+		// out loud, since neither raises an error anywhere.
+		why := "preview mode is on, or Navidrome has not granted this plugin write access"
+		if dryRun {
+			why = "preview mode is on, so nothing is written and the run still costs full price"
+		}
+		logf(pdk.LogWarn, "batch: paid for %d labels and wrote 0 tags: %s", out.Labelled, why)
 	}
 	if procErr != nil {
 		// Only surface an error the queue will retry when retrying could actually

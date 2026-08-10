@@ -1,7 +1,7 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://navidrome-mood.312.dev",
   "permissions": {
