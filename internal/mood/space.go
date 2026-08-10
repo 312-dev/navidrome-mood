@@ -25,8 +25,8 @@ type TempoFeel string
 // VocalKind is how the voice sits in the track, or that there isn't one.
 type VocalKind string
 
-// TempoFeels and VocalKinds are the closed sets written to moodtempo and
-// moodvocal. The connector reads both all-or-nothing with the five axes, so a
+// TempoFeels and VocalKinds are the closed sets written to ndmood_tempo and
+// ndmood_vocal. The connector reads both all-or-nothing with the five axes, so a
 // value outside these makes the whole track count as unlabelled.
 var (
 	TempoFeels = []TempoFeel{"still", "slow", "mid", "driving", "frantic"}

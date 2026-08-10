@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,16 +25,57 @@ import (
 // 2026-08-09 against Navidrome 0.63.2.
 const (
 	TagMood         = "mood"
-	TagEnergy       = "moodenergy"
-	TagValence      = "moodvalence"
-	TagIntensity    = "moodintensity"
-	TagAcousticness = "moodacousticness"
-	TagDensity      = "mooddensity"
-	TagTempo        = "moodtempo"
-	TagVocal        = "moodvocal"
-	TagTime         = "moodtime"
+	TagEnergy       = "ndmood_energy"
+	TagValence      = "ndmood_valence"
+	TagIntensity    = "ndmood_intensity"
+	TagAcousticness = "ndmood_acousticness"
+	TagDensity      = "ndmood_density"
+	TagTempo        = "ndmood_tempo"
+	TagVocal        = "ndmood_vocal"
+	TagTime         = "ndmood_time"
 	TagVibe         = "vibe"
 )
+
+// LegacyTagNames maps the names these tags were written under before 0.5.0 to
+// what they are called now.
+//
+// The eight that moved all began with `mood`, and so does Navidrome's own
+// built-in `mood` tag. Navidrome's REST layer has no filter mapping for
+// `tag_name`, so it falls through to a starts-with default in
+// persistence/sql_restful.go and compiles to `tag_name LIKE 'mood%'`. The song
+// list's Mood dropdown passes `tag_name: mood` as an exact literal, so on a
+// labelled library it returned 288 rows across nine tags instead of the 52 real
+// mood words, and the numeric axis values buried the words. `mood` and `vibe`
+// did not move: `mood` is the tag Navidrome actually means, and `vibe` never
+// collided.
+//
+// This map is not history. It is read on every pass, because a file written by
+// an older version is still out there carrying the old names, and nothing but
+// this can tell that its label is complete.
+var LegacyTagNames = map[string]string{
+	"moodenergy":       TagEnergy,
+	"moodvalence":      TagValence,
+	"moodintensity":    TagIntensity,
+	"moodacousticness": TagAcousticness,
+	"mooddensity":      TagDensity,
+	"moodtempo":        TagTempo,
+	"moodvocal":        TagVocal,
+	"moodtime":         TagTime,
+}
+
+// ReadableTagNames is every name a reader must look for: the current ten plus
+// the names an older version wrote. A reader that only knew the current ten
+// would see a fully labelled legacy file as blank, and a labelling run would
+// then pay to judge a library that is already judged.
+func ReadableTagNames() []string {
+	out := make([]string, 0, len(TagNames)+len(LegacyTagNames))
+	out = append(out, TagNames...)
+	for old := range LegacyTagNames {
+		out = append(out, old)
+	}
+	sort.Strings(out[len(TagNames):])
+	return out
+}
 
 // TagNames lists all ten, for callers that need to name the whole set rather
 // than one tag: the write, and the read that decides what is already labelled.
@@ -88,9 +130,9 @@ func tagsFor(l llm.Label) map[string][]string {
 // label, which is what makes a second pass over that track free.
 //
 // The rule is the connector's rule. navidrome-mcp/src/moodtags.ts reads the five
-// axes plus moodtempo and moodvocal all-or-nothing and treats moodtime and vibe
-// as optional, and the two sides have to agree or a track one of them calls
-// labelled is unlabelled to the other. `vibe` in particular must stay optional:
+// axes plus ndmood_tempo and ndmood_vocal all-or-nothing and treats ndmood_time
+// and vibe as optional, and the two sides have to agree or a track one of them
+// calls labelled is unlabelled to the other. `vibe` in particular must stay optional:
 // belonging to no region is a normal outcome that no value can express, so
 // requiring it would send a large slice of any library back through paid
 // labelling on every pass.

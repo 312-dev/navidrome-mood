@@ -24,6 +24,12 @@ const (
 	// concurrency setting or a stuck task on one cannot be mistaken for the other.
 	queueRevibe = "revibe"
 
+	// queueMigrate rewrites tags under their current names after a rename. Its
+	// own queue for the same reason as queueRevibe: it calls no provider and
+	// spends nothing, so it must not share a retry or concurrency policy with
+	// work that does.
+	queueMigrate = "migrate"
+
 	// scheduleSync keeps newly added music labelled. Fixed ID so re-registering
 	// on each load replaces the schedule rather than accumulating copies.
 	scheduleSync = "sync-new"
@@ -92,7 +98,7 @@ func (p *plugin) OnInit() error {
 	// means this fires on EVERY save, which is what the pending-batch guard in
 	// startRun is for.
 	switch mode, _ := host.ConfigGet("run"); mode {
-	case "sample", "everything", "revibe":
+	case "sample", "everything", "revibe", "migrate-tags":
 		if err := startRun(mode); err != nil {
 			logf(pdk.LogError, "run: FAILED to start: %v", err)
 		}
@@ -108,6 +114,8 @@ func (p *plugin) OnTaskExecute(req taskworker.TaskExecuteRequest) (string, error
 		return executeBatch(req.Payload)
 	case queueRevibe:
 		return executeRevibe(req.Payload)
+	case queueMigrate:
+		return executeMigrate(req.Payload)
 	default:
 		return "", fmt.Errorf("unknown queue %q", req.QueueName)
 	}

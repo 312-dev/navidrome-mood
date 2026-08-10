@@ -643,8 +643,8 @@ func contains(haystack []string, needle string) bool {
 // playlist the connector builds.
 func TestTagNamesMatchTheConnectorContract(t *testing.T) {
 	want := []string{
-		"mood", "moodenergy", "moodvalence", "moodintensity", "moodacousticness",
-		"mooddensity", "moodtempo", "moodvocal", "moodtime", "vibe",
+		"mood", "ndmood_energy", "ndmood_valence", "ndmood_intensity", "ndmood_acousticness",
+		"ndmood_density", "ndmood_tempo", "ndmood_vocal", "ndmood_time", "vibe",
 	}
 	got := append([]string(nil), TagNames...)
 	sort.Strings(got)

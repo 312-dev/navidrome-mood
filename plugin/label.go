@@ -34,6 +34,10 @@ const (
 	// second enqueue of the whole library on top of the first.
 	keyPendingRevibe = "run:pending-revibe"
 
+	// keyPendingMigrate is the same guard for the rename pass, counted separately
+	// for the same reason.
+	keyPendingMigrate = "run:pending-migrate"
+
 	// keySyncCursor is the modification time, in unix seconds, of the newest file
 	// auto-sync has already looked at. Everything at or below it has been checked
 	// and needs no further attention until something touches it again.
@@ -96,17 +100,23 @@ func ensureQueue() error {
 	}); err != nil {
 		return err
 	}
-	// Revibe reads tags, does arithmetic and writes one field, so a batch is a
-	// few hundred milliseconds against a labelling batch's thirteen seconds.
-	// Fixed concurrency rather than the configured one, because that setting
-	// exists to bound spend against the provider and there is no spend here.
-	return host.TaskCreateQueue(queueRevibe, host.QueueConfig{
-		Concurrency: 4,
-		MaxRetries:  3,
-		BackoffMs:   5_000,
-		DelayMs:     500,
-		RetentionMs: 24 * 60 * 60 * 1000,
-	})
+	// The free passes read tags, do arithmetic and write a field or two, so a
+	// batch is a few hundred milliseconds against a labelling batch's thirteen
+	// seconds. Fixed concurrency rather than the configured one, because that
+	// setting exists to bound spend against the provider and there is no spend
+	// on either of these.
+	for _, name := range []string{queueRevibe, queueMigrate} {
+		if err := host.TaskCreateQueue(name, host.QueueConfig{
+			Concurrency: 4,
+			MaxRetries:  3,
+			BackoffMs:   5_000,
+			DelayMs:     500,
+			RetentionMs: 24 * 60 * 60 * 1000,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // concurrency is how many batches may be in flight at once.
@@ -236,7 +246,7 @@ func changedSince(files []library.File, cursor int64, n int) []library.File {
 // inside Navidrome's 30-second ceiling, so each task reads metadata for its own
 // batch instead.
 func startRun(mode string) error {
-	if r := haltedReason(); r != "" && mode != "revibe" {
+	if r := haltedReason(); r != "" && mode != "revibe" && mode != "migrate-tags" {
 		// Recomputation is exempt. A halt exists to stop money going out and to
 		// make someone look at why; recomputation calls no provider and spends
 		// nothing, so refusing it would only mean an unpaid, purely local repair
@@ -282,6 +292,15 @@ func startRun(mode string) error {
 		return fmt.Errorf("no FLAC files found under %s", root)
 	}
 
+	if mode == "migrate-tags" {
+		// Same reasoning as revibe below: everything past this point prices a
+		// provider call, and rewriting a tag under a different name makes none.
+		return enqueueFree(queueMigrate, keyPendingMigrate, library.Paths(files),
+			"renaming tags on %d files in %d batches. This calls no provider and "+
+				"costs nothing: the values are already in your files and only their "+
+				"names change.")
+	}
+
 	if mode == "revibe" {
 		// Everything below this point is about paying a provider: the preview cap
 		// bounds a bill, preflight refuses a run that would exceed one, and the
@@ -291,7 +310,10 @@ func startRun(mode string) error {
 		// The whole library every time, with no skip list. Which tracks a radius
 		// change affects is not knowable without evaluating them, and the pass is
 		// free, so narrowing it could only ever leave a stale tag behind.
-		return enqueueRevibe(library.Paths(files))
+		return enqueueFree(queueRevibe, keyPendingRevibe, library.Paths(files),
+			"recomputing vibes for %d files in %d batches. This calls no provider "+
+				"and costs nothing: the regions are geometry over the five axes "+
+				"already in your files.")
 	}
 
 	if mode == "sample" {
@@ -427,20 +449,24 @@ func enqueue(paths []string) error {
 	return nil
 }
 
-// revibeBatchSize is how many files one recomputation task handles.
+// freeBatchSize is how many files one no-cost task handles.
 //
 // Much larger than a labelling batch because the limit is a different one. A
 // labelling batch is bounded by what the model can answer inside Navidrome's
 // 30-second invocation ceiling; this one only reads tags, does arithmetic and
 // writes at most one field, so the ceiling is reached by file I/O and 200 files
 // leaves ample room.
-const revibeBatchSize = 200
+const freeBatchSize = 200
 
-// enqueueRevibe splits paths into recomputation batches and queues them.
-func enqueueRevibe(paths []string) error {
+// enqueueFree splits paths into batches for a pass that spends nothing.
+//
+// message is a format string taking the file count and the batch count. It says
+// out loud that the pass is free, because the setting sits next to ones that are
+// not and the whole point of these passes is that nobody has to weigh the cost.
+func enqueueFree(queue, key string, paths []string, message string) error {
 	var queued int
-	for i := 0; i < len(paths); i += revibeBatchSize {
-		end := i + revibeBatchSize
+	for i := 0; i < len(paths); i += freeBatchSize {
+		end := i + freeBatchSize
 		if end > len(paths) {
 			end = len(paths)
 		}
@@ -448,17 +474,15 @@ func enqueueRevibe(paths []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := host.TaskEnqueue(queueRevibe, payload); err != nil {
-			return fmt.Errorf("enqueueing recomputation batch %d: %w", queued, err)
+		if _, err := host.TaskEnqueue(queue, payload); err != nil {
+			return fmt.Errorf("enqueueing %s batch %d: %w", queue, queued, err)
 		}
 		queued++
 	}
-	if err := writeInt(keyPendingRevibe, queued); err != nil {
+	if err := writeInt(key, queued); err != nil {
 		return err
 	}
-	logf(pdk.LogInfo, "recomputing vibes for %d files in %d batches. This calls no "+
-		"provider and costs nothing: the regions are geometry over the five axes "+
-		"already in your files.", len(paths), queued)
+	logf(pdk.LogInfo, message, len(paths), queued)
 	return nil
 }
 
@@ -610,6 +634,52 @@ func executeRevibe(payload []byte) (string, error) {
 			"way, so there is no bill to protect yourself from here.")
 	}
 	logf(pdk.LogInfo, "revibe: %s", summary)
+	return summary, nil
+}
+
+// executeMigrate rewrites one batch of files' tags under their current names.
+//
+// Like executeRevibe, no provider is built and no budget is loaded. An install
+// whose key has expired or whose cap is reached can still bring its library
+// forward, which matters more here than there: until this has run, a labelling
+// pass sees those tracks as unjudged.
+func executeMigrate(payload []byte) (string, error) {
+	var paths []string
+	if err := json.Unmarshal(payload, &paths); err != nil {
+		return "", fmt.Errorf("bad payload: %w", err)
+	}
+
+	t, err := newFileTagger()
+	if err != nil {
+		return "", err
+	}
+	root := t.mounts[0]
+
+	tracks, failed := library.ReadTracks(os.DirFS(root), root, paths)
+	for p, e := range failed {
+		logf(pdk.LogWarn, "migrate: cannot read %s: %s", p, e)
+	}
+
+	items := make([]runner.Item, 0, len(tracks))
+	for _, tr := range tracks {
+		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
+	}
+
+	dryRun := configBool("dryRun", false)
+	out := runner.MigrateTags(items, t, dryRun)
+	decrement(keyPendingMigrate)
+
+	summary := fmt.Sprintf("requested=%d already-current=%d renamed=%d errors=%d",
+		out.Requested, out.Current, out.Renamed, len(out.Errors))
+	for path, why := range out.Errors {
+		logf(pdk.LogWarn, "migrate: could not write %s: %s", path, why)
+	}
+	if dryRun {
+		logf(pdk.LogWarn, "migrate: preview mode is on, so nothing was written. "+
+			"Renaming costs nothing either way, so there is no bill to protect "+
+			"yourself from here.")
+	}
+	logf(pdk.LogInfo, "migrate: %s", summary)
 	return summary, nil
 }
 

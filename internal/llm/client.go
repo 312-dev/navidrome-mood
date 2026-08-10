@@ -181,9 +181,9 @@ func (l Label) Point() mood.Point {
 
 // KnownTimes drops time slots outside TimeSlots.
 //
-// Unlike the axes this is a filter rather than a rejection: moodtime sits outside
-// the all-or-nothing set, so a slot the connector has no name for costs nothing
-// to discard and does not make the rest of the track unusable.
+// Unlike the axes this is a filter rather than a rejection: ndmood_time sits
+// outside the all-or-nothing set, so a slot the connector has no name for costs
+// nothing to discard and does not make the rest of the track unusable.
 func KnownTimes(raw []string) []string {
 	var out []string
 	seen := make(map[string]bool, len(raw))

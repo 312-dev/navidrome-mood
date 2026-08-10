@@ -236,12 +236,15 @@ func readTrack(fsys fs.FS, p, full string) (*Track, error) {
 	t.Meta.Genres = c.Get("GENRE")
 	t.Meta.Year = parseYear(first(c, "DATE"), first(c, "YEAR"))
 
-	// The plugin's own ten, read from the block already in hand. runner.TagNames
-	// is the single list of them, shared with the writer so that a rename cannot
-	// leave the reader looking for a name nothing writes. Comments.Get matches
+	// The plugin's own tags, read from the block already in hand.
+	// runner.ReadableTagNames is the single list of them, shared with the writer
+	// so that a rename cannot leave the reader looking for a name nothing writes.
+	// It includes the names an older version used, because a file carrying only
+	// those is fully labelled and reading it as blank would send a finished
+	// library back through paid labelling. Comments.Get matches
 	// case-insensitively, so the lower-case contract names find the upper-case
 	// fields every tagger actually writes.
-	for _, name := range runner.TagNames {
+	for _, name := range runner.ReadableTagNames() {
 		if v := c.Get(name); len(v) > 0 {
 			if t.Tags == nil {
 				t.Tags = make(map[string][]string, len(runner.TagNames))

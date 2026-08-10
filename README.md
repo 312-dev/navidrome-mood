@@ -72,37 +72,37 @@ Navidrome's own config file. In TOML:
 
 ```toml
 # The five axes. Type = "int" is what makes them comparable as numbers, so that
-# "moodenergy above 70" is an arithmetic test rather than a string one.
-[Tags.moodenergy]
-Aliases = ["moodenergy"]
+# "ndmood_energy above 70" is an arithmetic test rather than a string one.
+[Tags.ndmood_energy]
+Aliases = ["ndmood_energy"]
 Type = "int"
 
-[Tags.moodvalence]
-Aliases = ["moodvalence"]
+[Tags.ndmood_valence]
+Aliases = ["ndmood_valence"]
 Type = "int"
 
-[Tags.moodintensity]
-Aliases = ["moodintensity"]
+[Tags.ndmood_intensity]
+Aliases = ["ndmood_intensity"]
 Type = "int"
 
-[Tags.moodacousticness]
-Aliases = ["moodacousticness"]
+[Tags.ndmood_acousticness]
+Aliases = ["ndmood_acousticness"]
 Type = "int"
 
-[Tags.mooddensity]
-Aliases = ["mooddensity"]
+[Tags.ndmood_density]
+Aliases = ["ndmood_density"]
 Type = "int"
 
 # Single-valued. No Split, because these hold exactly one word.
-[Tags.moodtempo]
-Aliases = ["moodtempo"]
+[Tags.ndmood_tempo]
+Aliases = ["ndmood_tempo"]
 
-[Tags.moodvocal]
-Aliases = ["moodvocal"]
+[Tags.ndmood_vocal]
+Aliases = ["ndmood_vocal"]
 
 # Multi-valued, split the same way Navidrome already splits `mood`.
-[Tags.moodtime]
-Aliases = ["moodtime"]
+[Tags.ndmood_time]
+Aliases = ["ndmood_time"]
 Split = [";", "/", ","]
 
 [Tags.vibe]
@@ -119,7 +119,7 @@ Three things about that block are worth understanding rather than copying:
 - **`Type = "int"` is the whole of numeric registration.** Navidrome collects
   every tag typed `int` or `float` on config load and registers them as numeric,
   which is what puts the value through `CAST(value AS REAL)` in a smart-playlist
-  comparison. Without it, `moodenergy` sorts and compares as text and `"9"` is
+  comparison. Without it, `ndmood_energy` sorts and compares as text and `"9"` is
   greater than `"80"`. There is no separate step to perform.
 - **Do not declare `mood`.** It already ships with Navidrome, aliased to `tmoo`,
   `mood`, `wm/mood` and the iTunes form, split on `;`, `/` and `,`. Redeclaring
@@ -140,7 +140,7 @@ GET /api/tag
 ```
 
 That is the web UI's own API, so the simplest way to call it is from a browser
-already logged in to Navidrome. If `moodenergy` and friends are in the list, the
+already logged in to Navidrome. If `ndmood_energy` and friends are in the list, the
 config took. If only `mood` is there, the other nine are being discarded and the
 config is wrong or was not reloaded. `GET /api/song/<id>` shows the `tags` object
 for one track, which is the same answer one level down.
@@ -150,17 +150,17 @@ for one track, which is the same answer one level down.
 | Tag | Value | Multi-valued |
 |---|---|---|
 | `mood` | 2 to 4 words from a fixed 52-term vocabulary | yes |
-| `moodenergy` | 0 to 100, how activated it is | no |
-| `moodvalence` | 0 to 100, how positive it sounds | no |
-| `moodintensity` | 0 to 100, how forceful | no |
-| `moodacousticness` | 0 to 100, acoustic at the top | no |
-| `mooddensity` | 0 to 100, how much is going on | no |
-| `moodtempo` | `still` `slow` `mid` `driving` `frantic` | no |
-| `moodvocal` | `instrumental` `sung` `rapped` `mixed` | no |
-| `moodtime` | time-of-day slots it suits | yes |
+| `ndmood_energy` | 0 to 100, how activated it is | no |
+| `ndmood_valence` | 0 to 100, how positive it sounds | no |
+| `ndmood_intensity` | 0 to 100, how forceful | no |
+| `ndmood_acousticness` | 0 to 100, acoustic at the top | no |
+| `ndmood_density` | 0 to 100, how much is going on | no |
+| `ndmood_tempo` | `still` `slow` `mid` `driving` `frantic` | no |
+| `ndmood_vocal` | `instrumental` `sung` `rapped` `mixed` | no |
+| `ndmood_time` | time-of-day slots it suits | yes |
 | `vibe` | named regions of mood space it falls in | yes |
 
-`moodtempo` is how fast the track *feels*, not its BPM. A slow, sparse track at
+`ndmood_tempo` is how fast the track *feels*, not its BPM. A slow, sparse track at
 140 BPM feels `slow`.
 
 The time slots are `early morning`, `morning`, `midday`, `afternoon`,
@@ -275,10 +275,10 @@ alongside `.m3u`. Once the tags are declared, they are ordinary criteria fields.
 ```json
 {
   "all": [
-    { "lt": { "moodenergy": 35 } },
-    { "gt": { "moodacousticness": 55 } },
-    { "isNot": { "moodtempo": "frantic" } },
-    { "is": { "moodtime": "late night" } }
+    { "lt": { "ndmood_energy": 35 } },
+    { "gt": { "ndmood_acousticness": 55 } },
+    { "isNot": { "ndmood_tempo": "frantic" } },
+    { "is": { "ndmood_time": "late night" } }
   ],
   "sort": "random",
   "limit": 100
@@ -286,21 +286,21 @@ alongside `.m3u`. Once the tags are declared, they are ordinary criteria fields.
 ```
 
 `is` against a multi-valued tag matches if *any* of its values match, so the
-`moodtime` clause reads as "late night is one of the times this track suits".
+`ndmood_time` clause reads as "late night is one of the times this track suits".
 `gt` and `lt` are the reason the axes have to be declared `Type = "int"`.
 
 Some more useful shapes:
 
 ```json
-{ "all": [ { "is": { "vibe": "focus" } }, { "is": { "moodvocal": "instrumental" } } ] }
+{ "all": [ { "is": { "vibe": "focus" } }, { "is": { "ndmood_vocal": "instrumental" } } ] }
 ```
 
 ```json
-{ "all": [ { "lt": { "moodvalence": 30 } }, { "gt": { "moodintensity": 70 } } ] }
+{ "all": [ { "lt": { "ndmood_valence": 30 } }, { "gt": { "ndmood_intensity": 70 } } ] }
 ```
 
 ```json
-{ "all": [ { "is": { "mood": "hypnotic" } }, { "gt": { "mooddensity": 60 } } ] }
+{ "all": [ { "is": { "mood": "hypnotic" } }, { "gt": { "ndmood_density": 60 } } ] }
 ```
 
 The operators that apply here are `is`, `isNot`, `gt`, `lt`, `contains`,
@@ -353,8 +353,8 @@ title and artist come from, so asking costs nothing beyond the read a labelling
 pass has to do anyway.
 
 A track is finished when it carries all seven of the values that are read
-all-or-nothing - the five axes, `moodtempo` and `moodvocal` - plus at least one
-`mood` word. `moodtime` and `vibe` are not required, because a track in no vibe
+all-or-nothing - the five axes, `ndmood_tempo` and `ndmood_vocal` - plus at least one
+`mood` word. `ndmood_time` and `vibe` are not required, because a track in no vibe
 region is a normal outcome and requiring one would send a large slice of any
 library back through paid labelling every pass. That is the same rule the
 navidrome-mcp connector applies when it reads these tags back, and the two have
@@ -369,10 +369,18 @@ Picard, beets or a hand edit, and nothing can tell which, so leaving it alone is
 the default. Turning `skipTagged` off relabels those tracks, and doing so
 replaces whatever wrote them. This plugin adds `mood`; it does not own it.
 
-There is no version marker anywhere and there is deliberately no migration. A
-future eleventh tag would be absent from every track written today, and that
-absence is what would mark them as needing another pass - which is exactly how
-today's ten-tag tracks are told apart from an older build's `mood`-only ones.
+There is no version marker anywhere, and a change to what the tags *contain*
+needs none. A future eleventh tag would be absent from every track written
+today, and that absence is what would mark them as needing another pass, which
+is exactly how today's ten-tag tracks are told apart from an older build's
+`mood`-only ones.
+
+A change to what the tags are *called* is the case that absence cannot express,
+because a renamed tag is indistinguishable from a missing one. So the old names
+are kept in `LegacyTagNames` and read on every pass. A track carrying a complete
+label under them is recognised as finished rather than blank, which is what stops
+a labelling run judging and billing a library it has already judged, and
+`run: migrate-tags` moves it forward for free.
 
 ## Known limits
 
@@ -405,8 +413,8 @@ The round trip is verified, on Navidrome 0.63.2, twice. Two containers were fed
 the same fixtures, one with the `Tags` config block above and one without: with
 it all ten tags came back through `/api/song` with multi-word values intact,
 without it only `mood` survived and the other nine were dropped silently. A
-`.nsp` smart playlist combining `gt moodenergy 50`, `lt moodvalence 45` and
-`is moodvocal sung` then selected the right track, which is what proves the
+`.nsp` smart playlist combining `gt ndmood_energy 50`, `lt ndmood_valence 45` and
+`is ndmood_vocal sung` then selected the right track, which is what proves the
 axes really do compare as numbers rather than as text.
 
 The same was then observed on a real 9,310-track library: tags written by this

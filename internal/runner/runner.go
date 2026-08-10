@@ -72,8 +72,13 @@ type Outcome struct {
 	// rest of Skipped because it is the one kind of skip the user can change
 	// their mind about, by turning skipTagged off.
 	MoodOnly int
-	Usage    llm.Usage
-	Cost     float64
+	// NeedsMigration counts tracks skipped because their label is written under
+	// the tag names an older version used. They are complete and cost nothing to
+	// bring forward, so the caller is expected to say so rather than let them
+	// look like unlabelled work.
+	NeedsMigration int
+	Usage          llm.Usage
+	Cost           float64
 }
 
 type Runner struct {
@@ -107,6 +112,14 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 			// skipTagged says, because that setting is about tags this plugin did
 			// not write and these are unmistakably its own.
 			out.Skipped++
+		case NeedsMigration(it.Tags):
+			// Judged already, under the names an older version used. FullyLabelled
+			// reads the current names only, so this track looks blank to it, and
+			// without this case a whole library written before 0.5.0 would be sent
+			// off and billed for a second time to produce the values it is already
+			// carrying. Renaming is free; see MigrateTags.
+			out.Skipped++
+			out.NeedsMigration++
 		case len(nonEmpty(it.Tags[TagMood])) > 0:
 			// A mood tag and nothing else. It is either an older version of this
 			// plugin or another tool entirely, and no amount of reading can tell

@@ -124,13 +124,14 @@ func TestAutoSyncIgnoresFilesWithNoModTime(t *testing.T) {
 // kept per track, and a 9,195-track library needed 3.4 MB against Navidrome's
 // 1 MB default when it was.
 var kvKeys = map[string]bool{
-	"keyPending":       true,
-	"keyPendingRevibe": true,
-	"keyBudget":        true,
-	"keySyncCursor":    true,
-	"keyMoodOnly":      true,
-	"keyStrikes":       true,
-	"keyHalted":        true,
+	"keyPending":        true,
+	"keyPendingRevibe":  true,
+	"keyPendingMigrate": true,
+	"keyBudget":         true,
+	"keySyncCursor":     true,
+	"keyMoodOnly":       true,
+	"keyStrikes":        true,
+	"keyHalted":         true,
 }
 
 // The storage seam is host-only, so this asserts the key list rather than the
@@ -255,9 +256,9 @@ func TestConcurrencyDefaultsToOneAndIsClamped(t *testing.T) {
 	}
 }
 
-// Recomputation must not be able to spend money.
+// The free passes must not be able to spend money.
 //
-// That is the entire proposition of the mode: a radius is a calibration, and a
+// That is the entire proposition of both modes: a radius is a calibration, and a
 // calibration nobody can afford to apply is one nobody will ever change. It is
 // also what lets recomputation run while a halt is in force, since a halt exists
 // to stop money going out. The claim is load-bearing enough that a comment is
@@ -281,15 +282,16 @@ func TestRecomputingVibesCannotCallAProvider(t *testing.T) {
 		"Label":         "is the provider call itself",
 	}
 
-	var found bool
+	free := map[string]bool{"executeRevibe": true, "executeMigrate": true}
+	found := map[string]bool{}
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Name.Name != "executeRevibe" {
+				if !ok || !free[fn.Name.Name] {
 					continue
 				}
-				found = true
+				found[fn.Name.Name] = true
 				ast.Inspect(fn, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -303,16 +305,18 @@ func TestRecomputingVibesCannotCallAProvider(t *testing.T) {
 						name = f.Name
 					}
 					if why, bad := banned[name]; bad {
-						t.Errorf("%s: executeRevibe calls %s, which %s. Recomputation "+
-							"derives the vibe from axes already in the files and has to "+
-							"stay free", fset.Position(call.Pos()), name, why)
+						t.Errorf("%s: %s calls %s, which %s. Both free passes derive "+
+							"everything from what is already in the files and have to "+
+							"stay free", fset.Position(call.Pos()), fn.Name.Name, name, why)
 					}
 					return true
 				})
 			}
 		}
 	}
-	if !found {
-		t.Fatal("executeRevibe not found, so this guard is checking nothing")
+	for name := range free {
+		if !found[name] {
+			t.Fatalf("%s not found, so this guard is checking nothing", name)
+		}
 	}
 }

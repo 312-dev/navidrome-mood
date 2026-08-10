@@ -10,10 +10,12 @@ ssh session gets, so every command below exports it.
 
 Verified on 2026-08-10.
 
-- **The library is labelled.** 9,195 of 9,310 tracks carry the full ten tags,
-  written by 0.3.6. The remaining 115 are the two non-FLAC files and the tracks
-  lost to batches that failed before the retry classification was fixed; an
-  `everything` pass mops them up for a few cents and skips the rest for free.
+- **The library is labelled.** All 9,195 live tracks carry the full ten tags.
+  Navidrome reports 9,310, and the difference is 115 records whose files are not
+  on disk: `?missing=true` returns exactly those 115, and every one of them has
+  zero plays. A labelling pass cannot help them, since this plugin walks the
+  filesystem and they are not in it. Clearing them is a `Scanner.PurgeMissing`
+  setting, not a plugin concern.
 - The nine custom tags are declared in `/data/navidrome.toml` and Navidrome has
   loaded them. Confirmed by the only test that can fail: an undeclared field is
   ignored and returns the whole library, a declared one filters. `?vibe=workout`
@@ -29,6 +31,9 @@ axes and costs nothing.
 ## Upgrading an install that is already labelled
 
 This is the common case now, and it is much shorter than a first install.
+
+### 0.4.0: the vibe radii were refit
+
 0.4.0 refits every vibe radius, so the `vibe` tags currently in the files are
 stale and no other tag is affected.
 
@@ -45,6 +50,41 @@ stale and no other tag is affected.
 
 The counts to expect on a 9,195-track library: a large `rewritten`, a
 substantial `cleared`, and `unlabelled=115`.
+
+### 0.5.0: the eight axis tags moved off the `mood` prefix
+
+`moodenergy`, `moodvalence`, `moodintensity`, `moodacousticness`, `mooddensity`,
+`moodtempo`, `moodvocal` and `moodtime` are now `ndmood_energy`, `ndmood_valence`,
+`ndmood_intensity`, `ndmood_acousticness`, `ndmood_density`, `ndmood_tempo`,
+`ndmood_vocal` and `ndmood_time`. `mood` and `vibe` did not move. The reason is
+in the README's "Declare the tags" section: Navidrome's REST layer has no
+filter mapping for `tag_name` and falls through to a starts-with default, so
+the song list's Mood dropdown was matching against every tag that happened to
+start with `mood` rather than against `mood` words alone.
+
+Order matters:
+
+1. Update the `Tags` block in `/data/navidrome.toml` to the `ndmood_*` names
+   and restart Navidrome. Until this lands, the eight axis tags already in the
+   files are invisible to Navidrome, the same as any undeclared tag.
+2. Set **Label my library** to `migrate-tags`. Like `revibe`, this calls no
+   provider and costs nothing: it reads each file's values under the old
+   names and writes them back under the new ones in the same pass, which is
+   what removes the old name. A file already on the new names costs one read
+   and no write, so running this twice is harmless.
+3. Run a full library rescan so Navidrome's `tag` table catches up to the
+   renamed files.
+
+Do not reach for `sample` or `everything` to do this instead. Both recognise a
+track still carrying values under the old names as needing migration rather
+than a fresh judgment, so neither will re-label those tracks or bill for them,
+but neither renames anything either; only `migrate-tags` does.
+
+**Redeploy `navidrome-mcp` at the same time.** The connector keeps its own
+copy of these ten names in `src/moodtags.ts`. A connector still reading the
+old names against files that now carry the new ones sees an entirely
+unlabelled library, the same failure a mismatched `internal/runner/tags.go`
+would cause on this side.
 
 ## First install
 
@@ -125,7 +165,7 @@ goes through Navidrome's scanner rather than trusting the plugin's own report:
 
 ```sh
 sqlite3 -readonly /data/navidrome.db \
-  "select tag_name, count(*) from tag where tag_name like 'mood%' or tag_name='vibe' group by tag_name;"
+  "select tag_name, count(*) from tag where tag_name like 'mood%' or tag_name like 'ndmood%' or tag_name='vibe' group by tag_name;"
 ```
 
 Ten rows, one per tag, is success. No rows means the scanner has not picked the
