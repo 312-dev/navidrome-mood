@@ -306,6 +306,19 @@ removes it and checks the removal.
 
 ## Known limits
 
+**The kvstore is the scaling limit.** One record per track, measured at about
+390 bytes, so roughly 3.4 MB for a 9,000 track library. Navidrome caps a
+plugin's storage at 1 MB by default and this plugin declares 64 MB, which covers
+about 170,000 tracks. Past that, labelling stops with `storage limit exceeded`
+and no tags are written, which looks like a labelling failure rather than a
+storage one.
+
+The record exists so the same track is not paid for twice. Since every value it
+holds is also written into the file, the file could serve as its own record and
+the per-track entry could go away entirely. That is the right fix and it has not
+been made.
+
+
 - **FLAC only**, as above.
 - **The batch API is not wired up.** The `batchMode` setting and the provider's
   `SupportsBatch` flag exist, but nothing currently submits work through a batch

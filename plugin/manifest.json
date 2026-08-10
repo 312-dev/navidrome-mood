@@ -13,7 +13,8 @@
       "filesystem": true
     },
     "kvstore": {
-      "reason": "Remember each track's mood judgement, which tracks are done, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought."
+      "reason": "Remember each track's mood judgement, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought. Measured at about 390 bytes per track, so the 1MB default holds roughly 2,600 tracks and silently stops a library larger than that from being labelled; 64MB covers about 170,000.",
+      "maxSize": "64MB"
     },
     "scheduler": {
       "reason": "Run the periodic check for newly added music, on the interval you set. Navidrome exposes no scan-completed hook, so polling is the only way to label new tracks without you starting a run by hand."
