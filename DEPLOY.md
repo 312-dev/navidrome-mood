@@ -40,7 +40,26 @@ scp ~/repos/navidrome-mood/dist/navidrome-mood.ndp macmini:/tmp/
 ssh macmini 'export PATH=/usr/local/bin:$PATH; docker cp /tmp/navidrome-mood.ndp navidrome:/data/plugins/navidrome-mood.ndp'
 ```
 
-### 2. Pick it up and confirm the version changed
+### 2. Re-enable it, because upgrading disables it
+
+An upgrade whose manifest declares a different permission set leaves the plugin
+registered but `enabled = 0`, pending your approval of the new permissions. This
+is the right behaviour and it is silent: a disabled plugin never loads, so it
+logs nothing at all, which reads like a failed install rather than a consent
+prompt.
+
+Going from 0.1.0 to 0.2.0 drops `subsonicapi` and `users`, so it happens on this
+upgrade. Enable it in Navidrome's plugin settings and confirm both flags:
+
+```sh
+docker exec navidrome sqlite3 -readonly /data/navidrome.db \
+  "select id, enabled, allow_write_access, manifest->>'version' from plugin;"
+```
+
+`enabled` and `allow_write_access` both need to be 1. Check the second one even
+if you granted it before, since the row was rewritten.
+
+### 3. Pick it up and confirm the version changed
 
 ```sh
 ssh macmini 'export PATH=/usr/local/bin:$PATH; docker restart navidrome && sleep 12; docker logs --tail 60 navidrome 2>&1 | grep -i "navidrome-mood"'
@@ -50,7 +69,7 @@ The line to look for is the readiness log. It must say **52 mood terms, 146
 synonyms**. If it still says 60 terms and 28 synonyms, the old `.ndp` is still
 being loaded and nothing below is worth doing.
 
-### 3. Turn off preview mode and reset the spend counter
+### 4. Turn off preview mode and reset the spend counter
 
 In Navidrome's plugin settings for navidrome-mood:
 
@@ -62,9 +81,9 @@ In Navidrome's plugin settings for navidrome-mood:
 - **Label my library**: set to `sample`.
 
 `sample` labels 20 tracks spread across the library for a few cents. Do not set
-`everything` until step 4 has passed.
+`everything` until step 5 has passed.
 
-### 4. Verify tags actually reached the files
+### 5. Verify tags actually reached the files
 
 Wait for the queue to run, then:
 
@@ -87,7 +106,7 @@ sqlite3 -readonly /data/navidrome.db \
 Ten rows, one per tag, is success. No rows means the scanner has not picked the
 files up yet: `ND_SCANSCHEDULE` is `1m`, so give it a minute.
 
-### 5. Only then, the full pass
+### 6. Only then, the full pass
 
 Set **Label my library** to `everything` and raise the run limit. Budget roughly
 $15 for about 9,000 tracks on the default model, from the one measured data
