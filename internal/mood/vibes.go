@@ -12,13 +12,29 @@ type Region struct {
 	Centre Axes
 	// Radius is the membership boundary, in the same units Distance returns.
 	//
-	// Calibrated so each region covers about 7% of the five-axis space, which
-	// puts a typical point in about one region and leaves most of the space in
-	// none. The hard constraints below cut a constrained region's real share
-	// further. Regions are shortcuts, not a partition: a track in no region is
-	// still reachable by axis ranges and vocabulary terms. The first guesses were
-	// much looser and had to be measured back down; `driving` covered 46% of the
-	// space before calibration.
+	// Calibrated so each region holds about 8% of a real library. That is a
+	// different basis from the one these radii were first fitted against, and the
+	// difference is most of their value: an earlier set was tuned to cover ~7% of
+	// UNIFORM five-axis space, on the assumption that a library spreads through
+	// the cube. It does not. Measured over 9,195 labelled tracks, two tracks
+	// picked at random sit 17.7 apart at the median, where two uniform points sit
+	// 39.1 apart. Radii of 18 to 24 were therefore wider than the typical gap
+	// between any two tracks in the collection, and `driving` tagged 45% of the
+	// library while `focus` reached 111 tracks. A tag that half the library
+	// carries is not a shortcut to anything.
+	//
+	// Fitting to a share of the library rather than of the space is what makes
+	// the number mean something to the person querying it: every vibe returns a
+	// pool big enough to build from and small enough to have chosen. Where a hard
+	// constraint makes the eligible pool too small to supply that share, the
+	// radius is capped at 55% of what is eligible instead, so the geometry keeps
+	// doing work rather than rubber-stamping the constraint. `focus` is the only
+	// region that hits it: this library holds 387 instrumental tracks, and asking
+	// for 8% of 9,195 would admit every one of them.
+	//
+	// Regions are shortcuts, not a partition. About a third of a library lands in
+	// no region at all, which is the expected outcome and not a gap: those tracks
+	// are still reachable by axis range and by vocabulary term.
 	Radius float64
 
 	// Valence, Tempo and Vocal are hard constraints, nil when unconstrained. A
@@ -40,20 +56,20 @@ type Region struct {
 // is where each region's hours live. Which hours suit a region is a playlist
 // question and the labeller has no opinion about clocks, so no hours here.
 var Regions = map[string]Region{
-	"wind down":    {Centre: Axes{Energy: 20, Valence: 52, Intensity: 14, Acousticness: 78, Density: 24}, Radius: 21, Tempo: []TempoFeel{"still", "slow"}, Gloss: "settling toward sleep"},
-	"slow morning": {Centre: Axes{Energy: 32, Valence: 62, Intensity: 22, Acousticness: 70, Density: 34}, Radius: 19, Tempo: []TempoFeel{"slow", "mid"}, Gloss: "easing into the day"},
-	"focus":        {Centre: Axes{Energy: 42, Valence: 50, Intensity: 28, Acousticness: 40, Density: 40}, Radius: 18, Vocal: []VocalKind{"instrumental"}, Gloss: "steady, undemanding, stays out of the way"},
-	"background":   {Centre: Axes{Energy: 38, Valence: 58, Intensity: 25, Acousticness: 55, Density: 38}, Radius: 18, Gloss: "pleasant and unobtrusive"},
-	"uplift":       {Centre: Axes{Energy: 68, Valence: 80, Intensity: 42, Acousticness: 45, Density: 58}, Radius: 21, Valence: valenceBound(55, 100), Gloss: "a deliberate lift in mood"},
-	"workout":      {Centre: Axes{Energy: 84, Valence: 62, Intensity: 70, Acousticness: 25, Density: 72}, Radius: 20, Tempo: []TempoFeel{"driving", "frantic"}, Gloss: "sustained physical push"},
-	"hype":         {Centre: Axes{Energy: 86, Valence: 70, Intensity: 66, Acousticness: 18, Density: 74}, Radius: 24, Valence: valenceBound(50, 100), Gloss: "getting up for something"},
-	"driving":      {Centre: Axes{Energy: 70, Valence: 60, Intensity: 58, Acousticness: 40, Density: 62}, Radius: 18, Tempo: []TempoFeel{"mid", "driving"}, Gloss: "motion; miles passing"},
-	"golden hour":  {Centre: Axes{Energy: 48, Valence: 68, Intensity: 32, Acousticness: 55, Density: 46}, Radius: 20, Valence: valenceBound(45, 100), Gloss: "warm light, day easing off"},
-	"late night":   {Centre: Axes{Energy: 40, Valence: 40, Intensity: 38, Acousticness: 35, Density: 45}, Radius: 18, Gloss: "after hours; low light"},
-	"melancholy":   {Centre: Axes{Energy: 28, Valence: 24, Intensity: 24, Acousticness: 65, Density: 32}, Radius: 22, Valence: valenceBound(0, 45), Gloss: "sitting with something sad"},
-	"heavy":        {Centre: Axes{Energy: 80, Valence: 32, Intensity: 84, Acousticness: 28, Density: 78}, Radius: 24, Valence: valenceBound(0, 55), Gloss: "loud, dark and physical"},
-	"dinner":       {Centre: Axes{Energy: 40, Valence: 66, Intensity: 26, Acousticness: 68, Density: 40}, Radius: 19, Gloss: "convivial but not competing with conversation"},
-	"party":        {Centre: Axes{Energy: 80, Valence: 82, Intensity: 50, Acousticness: 20, Density: 72}, Radius: 23, Valence: valenceBound(55, 100), Gloss: "a room full of people"},
+	"wind down":    {Centre: Axes{Energy: 20, Valence: 52, Intensity: 14, Acousticness: 78, Density: 24}, Radius: 13, Tempo: []TempoFeel{"still", "slow"}, Gloss: "settling toward sleep"},
+	"slow morning": {Centre: Axes{Energy: 32, Valence: 62, Intensity: 22, Acousticness: 70, Density: 34}, Radius: 9, Tempo: []TempoFeel{"slow", "mid"}, Gloss: "easing into the day"},
+	"focus":        {Centre: Axes{Energy: 42, Valence: 50, Intensity: 28, Acousticness: 40, Density: 40}, Radius: 20.5, Vocal: []VocalKind{"instrumental"}, Gloss: "steady, undemanding, stays out of the way"},
+	"background":   {Centre: Axes{Energy: 38, Valence: 58, Intensity: 25, Acousticness: 55, Density: 38}, Radius: 7.5, Gloss: "pleasant and unobtrusive"},
+	"uplift":       {Centre: Axes{Energy: 68, Valence: 80, Intensity: 42, Acousticness: 45, Density: 58}, Radius: 9, Valence: valenceBound(55, 100), Gloss: "a deliberate lift in mood"},
+	"workout":      {Centre: Axes{Energy: 84, Valence: 62, Intensity: 70, Acousticness: 25, Density: 72}, Radius: 10.5, Tempo: []TempoFeel{"driving", "frantic"}, Gloss: "sustained physical push"},
+	"hype":         {Centre: Axes{Energy: 86, Valence: 70, Intensity: 66, Acousticness: 18, Density: 74}, Radius: 13, Valence: valenceBound(50, 100), Gloss: "getting up for something"},
+	"driving":      {Centre: Axes{Energy: 70, Valence: 60, Intensity: 58, Acousticness: 40, Density: 62}, Radius: 9.5, Tempo: []TempoFeel{"mid", "driving"}, Gloss: "motion; miles passing"},
+	"golden hour":  {Centre: Axes{Energy: 48, Valence: 68, Intensity: 32, Acousticness: 55, Density: 46}, Radius: 7, Valence: valenceBound(45, 100), Gloss: "warm light, day easing off"},
+	"late night":   {Centre: Axes{Energy: 40, Valence: 40, Intensity: 38, Acousticness: 35, Density: 45}, Radius: 7.5, Gloss: "after hours; low light"},
+	"melancholy":   {Centre: Axes{Energy: 28, Valence: 24, Intensity: 24, Acousticness: 65, Density: 32}, Radius: 14.5, Valence: valenceBound(0, 45), Gloss: "sitting with something sad"},
+	"heavy":        {Centre: Axes{Energy: 80, Valence: 32, Intensity: 84, Acousticness: 28, Density: 78}, Radius: 13.5, Valence: valenceBound(0, 55), Gloss: "loud, dark and physical"},
+	"dinner":       {Centre: Axes{Energy: 40, Valence: 66, Intensity: 26, Acousticness: 68, Density: 40}, Radius: 8, Gloss: "convivial but not competing with conversation"},
+	"party":        {Centre: Axes{Energy: 80, Valence: 82, Intensity: 50, Acousticness: 20, Density: 72}, Radius: 10, Valence: valenceBound(55, 100), Gloss: "a room full of people"},
 }
 
 // RegionNames fixes the order VibesFor considers regions in, so two equidistant

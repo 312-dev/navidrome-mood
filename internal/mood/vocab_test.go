@@ -261,11 +261,23 @@ func TestTheTenderPairLandsInDifferentRegions(t *testing.T) {
 		Tempo: "slow", Vocal: "sung",
 	}
 
+	// The weights are what has to hold this pair apart, so assert on them
+	// directly. Region membership depends on the radii too, and a test that only
+	// checked membership would pass for the wrong reason the moment one of the
+	// two stopped landing anywhere. Two tracks picked at random from a real
+	// library sit about 18 apart; this pair has to be conspicuously further.
+	const apart = 30
+	if d := Distance(debussy.Axes, metallica.Axes); d < apart {
+		t.Errorf("the tender pair is %.1f apart, under %d: the distance weights "+
+			"have moved and words-only cohesion is back", d, apart)
+	}
+
 	left := vibeSet(VibesFor(debussy, len(RegionNames)))
 	right := vibeSet(VibesFor(metallica, len(RegionNames)))
-	if len(left) == 0 || len(right) == 0 {
-		t.Fatalf("expected both to land somewhere, got %v and %v", left, right)
-	}
+	// Landing in no region is a legitimate answer for either of them and says
+	// nothing is wrong: Nothing Else Matters sits 16.0 from its nearest centre,
+	// which is roughly the median gap between any two tracks in a library, and a
+	// track that middling belongs to nothing in particular.
 	for name := range left {
 		if right[name] {
 			t.Errorf("both tracks are in %q despite %.1f apart in mood-space",
@@ -329,15 +341,21 @@ func TestVibesForCapsAndOrders(t *testing.T) {
 	}
 }
 
-// The radii were calibrated by measurement, not intuition: an early set had
-// `driving` covering 46% of mood-space, which makes the tag say nothing. This
-// re-measures on a fixed grid so a hand-edited radius cannot quietly reinflate
-// a region. 15% is the point at which a vibe has stopped discriminating.
+// A backstop against a region growing to swallow the coordinate space, on a
+// fixed grid so a hand-edited radius cannot quietly reinflate one.
 //
-// The sweep covers whole points, tempo and vocal included, so the shares logged
-// here run below the ~7% the radii were tuned to: that figure is over the five
-// numeric axes, and a region constrained to two of five tempo feels only reaches
-// two fifths of the points its radius encloses.
+// Read what this does and does not prove. It sweeps a UNIFORM grid, and a real
+// library is nothing like uniform, so passing here says only that a region is
+// not absurd in the abstract. It is not the calibration test and it cannot be:
+// every radius in the set passed this at 15% while `driving` was tagging 45% of
+// a real collection. TestEveryRegionIsUsableOnALibrary in library_test.go is
+// the one that measures against a library-shaped distribution, and it is the one
+// that fails when a radius drifts.
+//
+// The shares logged here therefore run well under a region's real share. They
+// are also cut further by the hard constraints, which the sweep covers: a region
+// admitting two of five tempo feels reaches two fifths of the points its radius
+// encloses.
 func TestNoRegionSwallowsMoodSpace(t *testing.T) {
 	const (
 		step  = 10
