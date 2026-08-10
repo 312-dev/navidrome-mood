@@ -65,6 +65,11 @@ const (
 	// an uncapped tick would time out and never record a watermark to resume from.
 	// Whatever is left over is picked up on the next tick.
 	syncScanCap = 500
+
+	// maxConcurrency mirrors the taskqueue permission in the manifest. Navidrome
+	// clamps a queue to whatever the permission declares, so a larger number here
+	// would be accepted and quietly ignored.
+	maxConcurrency = 4
 )
 
 // ensureQueue registers the label queue and its worker.
@@ -77,12 +82,36 @@ const (
 // guard before ever reaching the create call.
 func ensureQueue() error {
 	return host.TaskCreateQueue(queueLabel, host.QueueConfig{
-		Concurrency: 1, // one LLM request at a time; the cap is spend, not speed
+		Concurrency: int32(concurrency()),
 		MaxRetries:  3,
 		BackoffMs:   5_000,
 		DelayMs:     500,
 		RetentionMs: 24 * 60 * 60 * 1000,
 	})
+}
+
+// concurrency is how many batches may be in flight at once.
+//
+// One by default, and that default is about the spend cap rather than about
+// speed. Spend is recorded by reading the counter, adding what a batch cost, and
+// writing it back, so two batches finishing together can read the same starting
+// value and one update is lost. At one worker that cannot happen and the cap is
+// exact; above one it becomes an underestimate, and the ceiling is enforced by
+// the lifetime cap instead.
+//
+// Navidrome polls the queue every 5 seconds, so a 13-second batch spends nearly
+// a third of its wall clock waiting. Parallel batches are what recover that.
+func concurrency() int {
+	n := configInt("concurrency", 1)
+	if n < 1 {
+		return 1
+	}
+	if n > maxConcurrency {
+		// Above what the taskqueue permission declares, Navidrome would clamp it
+		// silently and the setting would read as doing something it does not.
+		return maxConcurrency
+	}
+	return n
 }
 
 // syncNew queues files that have changed since the last check and are not

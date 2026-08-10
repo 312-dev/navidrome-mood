@@ -1,7 +1,7 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://github.com/312-dev/navidrome-mood",
   "permissions": {
@@ -20,7 +20,8 @@
       "reason": "Run the periodic check for newly added music, on the interval you set. Navidrome exposes no scan-completed hook, so polling is the only way to label new tracks without you starting a run by hand."
     },
     "taskqueue": {
-      "reason": "Run labelling as resumable background work. Each plugin invocation is capped at 30 seconds by Navidrome, so a whole-library pass has to be many small tasks rather than one long one."
+      "reason": "Run labelling as resumable background work. Each plugin invocation is capped at 30 seconds by Navidrome, so a whole-library pass has to be many small tasks rather than one long one. Up to 4 may run at once, which is what the Parallel requests setting controls.",
+      "maxConcurrency": 4
     }
   },
   "config": {
@@ -112,6 +113,14 @@
           "default": 20,
           "minimum": 1,
           "maximum": 60
+        },
+        "concurrency": {
+          "type": "integer",
+          "title": "Parallel requests",
+          "description": "How many batches may be in flight at once. Navidrome polls its queue every 5 seconds, so at 1 a batch spends about a third of its time waiting and a 9,000 track pass takes roughly two hours; at 3 it takes about forty minutes. The trade is the spend limit: it is counted by reading a total and writing it back, so parallel batches can overwrite each other's updates and the limit becomes an underestimate rather than a hard stop. At 1 it is exact. Leave it at 1 unless you want the speed and are watching the lifetime cap.",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 4
         },
         "batchMode": {
           "type": "boolean",
@@ -248,6 +257,10 @@
             {
               "type": "Control",
               "scope": "#/properties/batchSize"
+            },
+            {
+              "type": "Control",
+              "scope": "#/properties/concurrency"
             },
             {
               "type": "Control",

@@ -3,10 +3,12 @@
 package main
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +217,39 @@ func TestPreviewOverEverythingIsCapped(t *testing.T) {
 	}
 	if strings.Count(branch, "library.SampleAcross") < 2 {
 		t.Error("only one path narrows the file list; a preview over everything is unbounded")
+	}
+}
+
+// Concurrency defaults to 1 and is clamped to what the manifest declares.
+//
+// The default matters more than the clamp: spend is recorded by reading a total
+// and writing it back, so parallel batches can lose each other's updates and the
+// run limit stops being exact. Someone who never touches the setting must keep
+// the hard cap.
+func TestConcurrencyDefaultsToOneAndIsClamped(t *testing.T) {
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	c := m["config"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)["concurrency"].(map[string]any)
+	if c["default"].(float64) != 1 {
+		t.Errorf("concurrency defaults to %v, want 1: the spend cap is only exact at 1", c["default"])
+	}
+	declared := m["permissions"].(map[string]any)["taskqueue"].(map[string]any)["maxConcurrency"].(float64)
+	if c["maximum"].(float64) > declared {
+		t.Errorf("the setting allows %v but the permission declares %v; Navidrome would clamp it "+
+			"and the setting would read as doing something it does not", c["maximum"], declared)
+	}
+	// The Go constant has to agree, or the clamp in concurrency() is wrong.
+	src, err := os.ReadFile("label.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "maxConcurrency = "+strconv.Itoa(int(declared))) {
+		t.Errorf("label.go does not clamp to %v", declared)
 	}
 }
