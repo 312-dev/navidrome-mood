@@ -21,13 +21,18 @@ repeating.
 
 ## What is not done
 
-The installed plugin is the build from 2026-08-05. It has the old 60-word
-frequency vocabulary, writes only the `mood` tag, and has `dryRun` on. It has
-spent $24.98 of a $25 limit and now fails every queued batch on the spend cap.
+0.2.0 is registered and its package hash matches the local build, but it is
+disabled pending approval of its new permission set, so nothing is running. See
+step 2.
 
-Those labels cannot be reused. They carry four axes against the old vocabulary,
-and `density`, `tempo` and `vocal` were never judged, so the tracks need another
-pass whatever happens. `RecordSchema = 2` forces exactly that.
+`dryRun` is still on and the run counter still reads $24.98 of a $25 limit, so
+even once enabled it will write nothing and every batch will fail on the cap
+until step 4.
+
+The labels that $24.98 bought cannot be reused. They carry four axes against the
+old 60-word vocabulary, and `density`, `tempo` and `vocal` were never judged, so
+those tracks need another pass whatever happens. `RecordSchema = 2` forces
+exactly that.
 
 ## Deploy
 
