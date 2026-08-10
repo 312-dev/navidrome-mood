@@ -171,7 +171,21 @@ The vibe regions are `wind down`, `slow morning`, `focus`, `background`,
 `melancholy`, `heavy`, `dinner` and `party`. These are not chosen by the model.
 Each region is an area of mood space with a centre, a radius and optional
 constraints, and the plugin computes which ones a track's coordinates land in.
-A track in no region is a normal outcome, not a failure.
+A track in no region is a normal outcome, not a failure, and about a third of a
+library lands that way. Those tracks are still reachable by axis range and by
+mood word.
+
+The radii are fitted so each region holds roughly 8% of a real collection.
+That basis matters: real music does not spread evenly through the coordinate
+space. Measured over 9,195 labelled tracks, two picked at random sat 17.7 apart
+where two points drawn uniformly sat 39.1 apart, so radii tuned against an even
+spread were wider than the typical gap between any two tracks in the collection
+and `driving` ended up on 45% of the library.
+
+If you change a radius, add a region or rename one, set `Label my library` to
+`revibe`. It re-derives the `vibe` tag from the five axes already in your files.
+No provider is called and nothing is charged, because the regions are geometry
+over coordinates you have already paid for.
 
 ## Why there is no "custom mood words" setting
 
@@ -244,6 +258,12 @@ whole library.
 
 Start with `run: sample`. It labels 20 tracks spread across the library for a few
 cents, which is enough to decide whether you like the results.
+
+`run: revibe` is the one setting here that is free. It recomputes the `vibe` tag
+from axes already in your files and never contacts a provider, so it works with
+an expired key, a spent budget or a halted run. It is what you use after changing
+a region, and it is safe to run at any time: a track whose vibes have not changed
+is not rewritten at all.
 
 ## A worked smart playlist
 

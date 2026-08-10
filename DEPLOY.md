@@ -6,44 +6,47 @@ Specific to this install: Navidrome runs as the `navidrome` container in the
 `docker` is at `/usr/local/bin/docker` and is not on the PATH a non-interactive
 ssh session gets, so every command below exports it.
 
-Everything in "Already done" was verified on 2026-08-09 and does not need
-repeating.
+## Where this install actually is
 
-## Already done
+Verified on 2026-08-10.
 
+- **The library is labelled.** 9,195 of 9,310 tracks carry the full ten tags,
+  written by 0.3.6. The remaining 115 are the two non-FLAC files and the tracks
+  lost to batches that failed before the retry classification was fixed; an
+  `everything` pass mops them up for a few cents and skips the rest for free.
 - The nine custom tags are declared in `/data/navidrome.toml` and Navidrome has
   loaded them. Confirmed by the only test that can fail: an undeclared field is
   ignored and returns the whole library, a declared one filters. `?vibe=workout`
-  and `?moodenergy=88` return 0 of 9,310 while `?notarealtag=zzz` returns 9,310.
-- `allow_write_access` is 1 for this plugin, so writes are permitted.
-- `/music` is mounted read-write.
-- Plugins are enabled and the plugin host loads WASM plugins successfully.
+  and `?moodenergy=88` returned 0 of 9,310 while `?notarealtag=zzz` returned
+  9,310, before any track was labelled.
+- `allow_write_access` is 1, `/music` is mounted read-write, `dryRun` is off,
+  and the per-track key-value entries an older version left behind have drained.
 
-## What is not done
+Because the axes are in the files, the expensive part is done and stays done.
+Every later change to the region geometry is a `revibe` pass, which reads those
+axes and costs nothing.
 
-0.2.0 is what the Mini has. The local build is 0.3.2, which is three changes
-ahead: the files are the record rather than the key-value store, the model is
-sent a short handle instead of a file path, and the progress relay settings are
-gone. See step 2.
+## Upgrading an install that is already labelled
 
-`dryRun` is still on and the run counter still reads $24.98 of a $25 limit, so
-even once enabled it will write nothing and every batch will fail on the cap
-until step 4.
+This is the common case now, and it is much shorter than a first install.
+0.4.0 refits every vibe radius, so the `vibe` tags currently in the files are
+stale and no other tag is affected.
 
-The $24.98 bought nothing that survives. Preview mode was on, so no tag reached
-a file, and the tags in the files are the only record this plugin keeps. Those
-tracks carry no mood tags and are ordinary candidates for the next pass.
+1. Copy the package over and reload, as in steps 1 to 3 below. The permission
+   set has not changed since 0.3.x, so the plugin should stay enabled; check
+   anyway, because a disabled plugin logs nothing at all.
+2. Set **Label my library** to `revibe`. Leave the spend limit alone. No
+   provider is contacted, so an expired key or an exhausted budget does not
+   matter, and a halt does not block it.
+3. Watch for `revibe: requested=... rewritten=... cleared=...`. `cleared` counts
+   tracks that no longer fall in any region, which the tightened radii make
+   common and which is the intended effect rather than a loss.
+4. Set **Label my library** back to `off`.
 
-What that run did leave behind is about 4,200 per-track entries in the plugin's
-key-value store, roughly 1.6 MB. Nothing reads them any more. 0.3.2 deletes them
-as it goes, 500 per load and 500 per auto-sync tick, and logs how many remain.
+The counts to expect on a 9,195-track library: a large `rewritten`, a
+substantial `cleared`, and `unlabelled=115`.
 
-It asks for 8 MB of storage purely so that clearing them has room to happen: a
-store over its allowance refuses every write, including the spend counter, and a
-spend counter that cannot be written halts the plugin. The plugin's own needs
-are a few hundred bytes.
-
-## Deploy
+## First install
 
 ### 1. Copy the package over
 
@@ -62,9 +65,8 @@ is the right behaviour and it is silent: a disabled plugin never loads, so it
 logs nothing at all, which reads like a failed install rather than a consent
 prompt.
 
-Going from 0.2.0 to 0.3.2 changes both the `kvstore` and `http` permissions, so
-it happens on this upgrade too. Enable it
-in Navidrome's plugin settings and confirm both flags:
+It happens on any upgrade that changes the permission set. Enable it in
+Navidrome's plugin settings and confirm both flags:
 
 ```sh
 docker exec navidrome sqlite3 -readonly /data/navidrome.db \
@@ -146,7 +148,12 @@ it is what stops repeated runs adding up to a number you did not intend.
 - **`written=0`** with labelling working: preview mode is on, or write access was
   revoked. Both are in the plugin settings.
 - **Every batch fails on the spend cap**: the run limit was not changed, so the
-  counter was not reset.
+  counter was not reset. This cannot happen on a `revibe` pass, which never
+  reads the counter.
+- **`revibe` reports a large `unlabelled`**: those tracks do not carry the five
+  axes plus tempo and vocal, so there is nothing to recompute a vibe from.
+  Recomputation never consults a model to fill a gap. Send them through
+  `everything` first.
 - **Tags in the files but nothing in Navidrome**: the `Tags` block in
   `/data/navidrome.toml` was lost. An undeclared tag is discarded silently by
   the scanner. Re-check with the 0-versus-9,310 test above.

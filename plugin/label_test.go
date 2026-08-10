@@ -124,12 +124,13 @@ func TestAutoSyncIgnoresFilesWithNoModTime(t *testing.T) {
 // kept per track, and a 9,195-track library needed 3.4 MB against Navidrome's
 // 1 MB default when it was.
 var kvKeys = map[string]bool{
-	"keyPending":    true,
-	"keyBudget":     true,
-	"keySyncCursor": true,
-	"keyMoodOnly":   true,
-	"keyStrikes":    true,
-	"keyHalted":     true,
+	"keyPending":       true,
+	"keyPendingRevibe": true,
+	"keyBudget":        true,
+	"keySyncCursor":    true,
+	"keyMoodOnly":      true,
+	"keyStrikes":       true,
+	"keyHalted":        true,
 }
 
 // The storage seam is host-only, so this asserts the key list rather than the
@@ -251,5 +252,67 @@ func TestConcurrencyDefaultsToOneAndIsClamped(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "maxConcurrency = "+strconv.Itoa(int(declared))) {
 		t.Errorf("label.go does not clamp to %v", declared)
+	}
+}
+
+// Recomputation must not be able to spend money.
+//
+// That is the entire proposition of the mode: a radius is a calibration, and a
+// calibration nobody can afford to apply is one nobody will ever change. It is
+// also what lets recomputation run while a halt is in force, since a halt exists
+// to stop money going out. The claim is load-bearing enough that a comment is
+// not sufficient - somebody reaching for a track title or a missing axis could
+// wire a provider call in here and every count in the summary would still look
+// healthy while the bill moved.
+//
+// Names rather than types, because the check has to survive a refactor that
+// renames the provider interface.
+func TestRecomputingVibesCannotCallAProvider(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	banned := map[string]string{
+		"buildProvider": "builds an LLM client",
+		"loadBudget":    "loads the spend counter, which only a paid call needs",
+		"persistSpend":  "writes the spend counter",
+		"preflight":     "costs a run before starting it",
+		"Label":         "is the provider call itself",
+	}
+
+	var found bool
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Name.Name != "executeRevibe" {
+					continue
+				}
+				found = true
+				ast.Inspect(fn, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					var name string
+					switch f := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						name = f.Sel.Name
+					case *ast.Ident:
+						name = f.Name
+					}
+					if why, bad := banned[name]; bad {
+						t.Errorf("%s: executeRevibe calls %s, which %s. Recomputation "+
+							"derives the vibe from axes already in the files and has to "+
+							"stay free", fset.Position(call.Pos()), name, why)
+					}
+					return true
+				})
+			}
+		}
+	}
+	if !found {
+		t.Fatal("executeRevibe not found, so this guard is checking nothing")
 	}
 }

@@ -158,7 +158,7 @@ func TestConfigEnumsMatchTheCode(t *testing.T) {
 
 	// Every value the code branches on, and nothing else.
 	for field, handled := range map[string][]string{
-		"run":      {"off", "sample", "everything"},
+		"run":      {"off", "sample", "everything", "revibe"},
 		"selfTest": {"off", "read", "write"},
 		"provider": {"anthropic", "openai-compatible"},
 	} {

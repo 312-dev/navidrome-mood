@@ -17,6 +17,13 @@ import (
 const (
 	queueLabel = "label"
 
+	// queueRevibe recomputes the `vibe` tag from axes already in the files. Its
+	// own queue rather than a flag on queueLabel, because the two differ in the
+	// thing that matters about a queue: a label task costs money and calls a
+	// provider, a revibe task does neither. Separate queues mean a retry, a
+	// concurrency setting or a stuck task on one cannot be mistaken for the other.
+	queueRevibe = "revibe"
+
 	// scheduleSync keeps newly added music labelled. Fixed ID so re-registering
 	// on each load replaces the schedule rather than accumulating copies.
 	scheduleSync = "sync-new"
@@ -84,7 +91,8 @@ func (p *plugin) OnInit() error {
 	// every config save, so flipping `run` takes effect immediately. It also
 	// means this fires on EVERY save, which is what the pending-batch guard in
 	// startRun is for.
-	if mode, _ := host.ConfigGet("run"); mode == "sample" || mode == "everything" {
+	switch mode, _ := host.ConfigGet("run"); mode {
+	case "sample", "everything", "revibe":
 		if err := startRun(mode); err != nil {
 			logf(pdk.LogError, "run: FAILED to start: %v", err)
 		}
@@ -98,6 +106,8 @@ func (p *plugin) OnTaskExecute(req taskworker.TaskExecuteRequest) (string, error
 	switch req.QueueName {
 	case queueLabel:
 		return executeBatch(req.Payload)
+	case queueRevibe:
+		return executeRevibe(req.Payload)
 	default:
 		return "", fmt.Errorf("unknown queue %q", req.QueueName)
 	}

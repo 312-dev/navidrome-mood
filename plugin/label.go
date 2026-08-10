@@ -28,6 +28,12 @@ const (
 	keyPending = "run:pending"
 	keyBudget  = "run:budget"
 
+	// keyPendingRevibe is the same guard for recomputation, counted separately
+	// because the two queues are separate. Sharing one counter would let a
+	// finished revibe batch decrement a labelling run's depth and unblock a
+	// second enqueue of the whole library on top of the first.
+	keyPendingRevibe = "run:pending-revibe"
+
 	// keySyncCursor is the modification time, in unix seconds, of the newest file
 	// auto-sync has already looked at. Everything at or below it has been checked
 	// and needs no further attention until something touches it again.
@@ -81,8 +87,21 @@ const (
 // it sat pending for minutes because startRun returned at the already-queued
 // guard before ever reaching the create call.
 func ensureQueue() error {
-	return host.TaskCreateQueue(queueLabel, host.QueueConfig{
+	if err := host.TaskCreateQueue(queueLabel, host.QueueConfig{
 		Concurrency: int32(concurrency()),
+		MaxRetries:  3,
+		BackoffMs:   5_000,
+		DelayMs:     500,
+		RetentionMs: 24 * 60 * 60 * 1000,
+	}); err != nil {
+		return err
+	}
+	// Revibe reads tags, does arithmetic and writes one field, so a batch is a
+	// few hundred milliseconds against a labelling batch's thirteen seconds.
+	// Fixed concurrency rather than the configured one, because that setting
+	// exists to bound spend against the provider and there is no spend here.
+	return host.TaskCreateQueue(queueRevibe, host.QueueConfig{
+		Concurrency: 4,
 		MaxRetries:  3,
 		BackoffMs:   5_000,
 		DelayMs:     500,
@@ -217,7 +236,11 @@ func changedSince(files []library.File, cursor int64, n int) []library.File {
 // inside Navidrome's 30-second ceiling, so each task reads metadata for its own
 // batch instead.
 func startRun(mode string) error {
-	if r := haltedReason(); r != "" {
+	if r := haltedReason(); r != "" && mode != "revibe" {
+		// Recomputation is exempt. A halt exists to stop money going out and to
+		// make someone look at why; recomputation calls no provider and spends
+		// nothing, so refusing it would only mean an unpaid, purely local repair
+		// is unavailable exactly when a run has gone wrong.
 		logf(pdk.LogWarn, "run: not starting, work is halted: %s", describeHalt(r))
 		return nil
 	}
@@ -227,6 +250,16 @@ func startRun(mode string) error {
 	}
 	if pending > 0 {
 		logf(pdk.LogInfo, "run: %d batches still queued, not starting another", pending)
+		return nil
+	}
+	// Both queues write tags into the same files, so recomputation waits for
+	// labelling either way round rather than racing it over one file.
+	revibePending, err := readInt(keyPendingRevibe)
+	if err != nil {
+		return err
+	}
+	if revibePending > 0 {
+		logf(pdk.LogInfo, "run: %d vibe recomputation batches still queued, not starting another", revibePending)
 		return nil
 	}
 
@@ -247,6 +280,18 @@ func startRun(mode string) error {
 	}
 	if len(files) == 0 {
 		return fmt.Errorf("no FLAC files found under %s", root)
+	}
+
+	if mode == "revibe" {
+		// Everything below this point is about paying a provider: the preview cap
+		// bounds a bill, preflight refuses a run that would exceed one, and the
+		// mood-only tally is about what labelling skipped. None of it applies to
+		// arithmetic over tags that are already in the files.
+		//
+		// The whole library every time, with no skip list. Which tracks a radius
+		// change affects is not knowable without evaluating them, and the pass is
+		// free, so narrowing it could only ever leave a stale tag behind.
+		return enqueueRevibe(library.Paths(files))
 	}
 
 	if mode == "sample" {
@@ -382,6 +427,41 @@ func enqueue(paths []string) error {
 	return nil
 }
 
+// revibeBatchSize is how many files one recomputation task handles.
+//
+// Much larger than a labelling batch because the limit is a different one. A
+// labelling batch is bounded by what the model can answer inside Navidrome's
+// 30-second invocation ceiling; this one only reads tags, does arithmetic and
+// writes at most one field, so the ceiling is reached by file I/O and 200 files
+// leaves ample room.
+const revibeBatchSize = 200
+
+// enqueueRevibe splits paths into recomputation batches and queues them.
+func enqueueRevibe(paths []string) error {
+	var queued int
+	for i := 0; i < len(paths); i += revibeBatchSize {
+		end := i + revibeBatchSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		payload, err := json.Marshal(paths[i:end])
+		if err != nil {
+			return err
+		}
+		if _, err := host.TaskEnqueue(queueRevibe, payload); err != nil {
+			return fmt.Errorf("enqueueing recomputation batch %d: %w", queued, err)
+		}
+		queued++
+	}
+	if err := writeInt(keyPendingRevibe, queued); err != nil {
+		return err
+	}
+	logf(pdk.LogInfo, "recomputing vibes for %d files in %d batches. This calls no "+
+		"provider and costs nothing: the regions are geometry over the five axes "+
+		"already in your files.", len(paths), queued)
+	return nil
+}
+
 // executeBatch labels one batch. Returns a human-readable summary, which the task
 // queue stores and Navidrome surfaces.
 func executeBatch(payload []byte) (string, error) {
@@ -484,6 +564,52 @@ func executeBatch(payload []byte) (string, error) {
 		return summary, procErr
 	}
 	logf(pdk.LogInfo, "batch: %s", summary)
+	return summary, nil
+}
+
+// executeRevibe recomputes the `vibe` tag for one batch of files.
+//
+// No provider is built and no budget is loaded, and that is the point rather
+// than an omission: an install whose API key has expired, whose spend cap is
+// reached or whose provider is down can still apply a region change, because
+// nothing here asks anyone anything.
+func executeRevibe(payload []byte) (string, error) {
+	var paths []string
+	if err := json.Unmarshal(payload, &paths); err != nil {
+		return "", fmt.Errorf("bad payload: %w", err)
+	}
+
+	t, err := newFileTagger()
+	if err != nil {
+		return "", err
+	}
+	root := t.mounts[0]
+
+	tracks, failed := library.ReadTracks(os.DirFS(root), root, paths)
+	for p, e := range failed {
+		logf(pdk.LogWarn, "revibe: cannot read %s: %s", p, e)
+	}
+
+	items := make([]runner.Item, 0, len(tracks))
+	for _, tr := range tracks {
+		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
+	}
+
+	dryRun := configBool("dryRun", false)
+	out := runner.Revibe(items, t, dryRun)
+	decrement(keyPendingRevibe)
+
+	summary := fmt.Sprintf("requested=%d unlabelled=%d unchanged=%d rewritten=%d cleared=%d errors=%d",
+		out.Requested, out.Unlabelled, out.Unchanged, out.Written, out.Cleared, len(out.Errors))
+	for path, why := range out.Errors {
+		logf(pdk.LogWarn, "revibe: could not write %s: %s", path, why)
+	}
+	if dryRun {
+		logf(pdk.LogWarn, "revibe: preview mode is on, so nothing was written. "+
+			"The counts say what would change. Recomputation costs nothing either "+
+			"way, so there is no bill to protect yourself from here.")
+	}
+	logf(pdk.LogInfo, "revibe: %s", summary)
 	return summary, nil
 }
 
