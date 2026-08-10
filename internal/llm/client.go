@@ -57,6 +57,11 @@ var (
 	// request has a real chance of working, which is what separates this from a
 	// 4xx.
 	ErrMalformedReply = errors.New("llm: reply did not match the schema")
+	// ErrTransport is any failure to complete the HTTP exchange at all: a
+	// timeout, a reset connection, DNS. An error from the Doer always means this,
+	// because a request that reached the provider comes back as a Response with a
+	// status code, however unhappy that status is.
+	ErrTransport = errors.New("llm: could not reach the provider")
 )
 
 // APIError carries a provider error in a form worth showing a user. Provider

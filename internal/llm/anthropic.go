@@ -156,7 +156,7 @@ func (a *Anthropic) Label(system string, tracks []Track) (*Result, error) {
 		TimeoutMs: 25_000, // under Navidrome's 30s invocation ceiling
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTransport, err)
 	}
 	if err := checkResponse(a.Name(), resp); err != nil {
 		return nil, err

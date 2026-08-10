@@ -39,8 +39,13 @@ func Retryable(err error) bool {
 		return apiErr.Status >= 500
 	}
 
-	// Transport-level failures (connection reset, timeout) surface as plain
-	// errors from the host and are worth one more go.
+	if errors.Is(err, ErrTransport) {
+		// The request never completed, so the provider may not have seen it at
+		// all and nothing about it was necessarily wrong. Observed on a live
+		// 9,195 track pass: a single "context deadline exceeded" ended a batch
+		// permanently and took 20 tracks with it.
+		return true
+	}
 	if errors.Is(err, ErrTruncated) {
 		// A 10 MB response will be 10 MB again. Retrying just re-buys it.
 		return false

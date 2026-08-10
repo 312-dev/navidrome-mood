@@ -137,3 +137,21 @@ func TestAMalformedReplyIsWorthRetrying(t *testing.T) {
 		}
 	}
 }
+
+// A request that never completed is worth another go.
+//
+// Observed on a live 9,195 track pass: one "context deadline exceeded" posting to
+// the provider ended a batch permanently and took 20 tracks with it. The
+// provider may never have seen the request, and nothing about it was necessarily
+// wrong.
+//
+// This also guards a comment that once promised the behaviour without any code
+// implementing it, which is the worse of the two bugs: a reader checking whether
+// timeouts were handled would have found a sentence saying yes.
+func TestATransportFailureIsWorthRetrying(t *testing.T) {
+	err := fmt.Errorf("%w: %v", ErrTransport,
+		`Post "https://api.anthropic.com/v1/messages": context deadline exceeded`)
+	if !Retryable(err) {
+		t.Error("a timeout is not retryable; one network blip costs a whole batch")
+	}
+}

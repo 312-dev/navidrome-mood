@@ -143,7 +143,7 @@ func (o *OpenAICompatible) Label(system string, tracks []Track) (*Result, error)
 		TimeoutMs: 25_000,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTransport, err)
 	}
 	if err := checkResponse(o.Name(), resp); err != nil {
 		return nil, err
