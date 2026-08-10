@@ -369,17 +369,29 @@ today's ten-tag tracks are told apart from an older build's `mood`-only ones.
   `SupportsBatch` flag exist, but nothing currently submits work through a batch
   endpoint, so the 50% discount is not being taken. Cost figures here assume
   ordinary requests.
-- **The progress relay is not implemented.** `statusToken`, `relayUrl` and
-  `sendTrackTitles` are present in the settings form and no code reads them, so
-  nothing is sent anywhere regardless of how they are set.
-- **Nothing has verified the tags round-tripping through Navidrome yet.** The
-  claim that a custom tag written into a FLAC comes back out of `/api/song`
-  intact rests on Navidrome's declared behaviour, not on an observed run of this
-  plugin. Check `/api/tag` after your first sample pass rather than building on
-  the assumption.
+- **There is no progress reporting beyond Navidrome's log.** A run says what it
+  did in the log and nowhere else, which is how a plugin quietly doing nothing
+  goes unnoticed for days. Watching a labelling pass means watching the log.
 - **Whether third-party clients surface these tags is untested.** Navidrome
   exposes declared tags through its API, but no Subsonic client and no Music
   Assistant instance has been checked against these nine custom names.
+
+## What has actually been observed
+
+The round trip is verified, on Navidrome 0.63.2, twice. Two containers were fed
+the same fixtures, one with the `Tags` config block above and one without: with
+it all ten tags came back through `/api/song` with multi-word values intact,
+without it only `mood` survived and the other nine were dropped silently. A
+`.nsp` smart playlist combining `gt moodenergy 50`, `lt moodvalence 45` and
+`is moodvocal sung` then selected the right track, which is what proves the
+axes really do compare as numbers rather than as text.
+
+The same was then observed on a real 9,310-track library: tags written by this
+plugin, read back by Navidrome's own scanner, spread across 13 of the 14 vibe
+regions.
+
+What has NOT been observed is a full pass. The largest completed run is a
+sample.
 
 ## Building
 

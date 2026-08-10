@@ -112,22 +112,23 @@ func TestSubsonicAPIAndUsersTravelTogether(t *testing.T) {
 // detail page. Someone who installed navidrome-mood.ndp clicks it and must land
 // somewhere unmistakably the same project, so the host has to track the plugin
 // name rather than drift into something shorter and cleverer.
-func TestWebsiteAndRelayMatchThePluginName(t *testing.T) {
+// The progress relay was removed rather than left as a settings form that
+// promises something no code does. A permission reason or a config field
+// describing a feature that does not exist is read by users deciding whether to
+// install, so it is worse than a missing feature.
+func TestNoSettingsPromiseAFeatureThatDoesNotExist(t *testing.T) {
 	m := loadManifest(t)
-	name, _ := m["name"].(string)
-	if name == "" {
-		t.Fatal("manifest has no name")
-	}
-	wantHost := "https://" + name + ".312.dev"
-
-	if got, _ := m["website"].(string); got != wantHost {
-		t.Errorf("website = %q, want %q", got, wantHost)
-	}
-
 	props := m["config"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)
-	relay := props["relayUrl"].(map[string]any)["default"]
-	if relay != wantHost {
-		t.Errorf("relayUrl default = %v, want %q", relay, wantHost)
+	for _, gone := range []string{"statusToken", "relayUrl", "sendTrackTitles"} {
+		if _, ok := props[gone]; ok {
+			t.Errorf("config still offers %q, which nothing reads", gone)
+		}
+	}
+	httpReason := m["permissions"].(map[string]any)["http"].(map[string]any)["reason"].(string)
+	for _, claim := range []string{"progress", "status endpoint", "webhook"} {
+		if strings.Contains(strings.ToLower(httpReason), claim) {
+			t.Errorf("the http permission still claims %q", claim)
+		}
 	}
 }
 

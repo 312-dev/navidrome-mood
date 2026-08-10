@@ -1,12 +1,12 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
-  "website": "https://navidrome-mood.312.dev",
+  "website": "https://github.com/312-dev/navidrome-mood",
   "permissions": {
     "http": {
-      "reason": "Send track metadata to the LLM provider you configure, and optionally post progress to a status endpoint you choose. No requiredHosts is declared, so any public host you point it at works while loopback and private addresses stay blocked."
+      "reason": "Send track metadata to the LLM provider you configure, and nothing else. No requiredHosts is declared so any public endpoint you point it at works, including a local OpenAI-compatible server, while loopback and private addresses stay blocked."
     },
     "library": {
       "reason": "Find your music, and write the mood tags directly into the audio files. Nothing else in the file is modified: audio bytes are never decoded, re-encoded, or moved, and the write is refused if the STREAMINFO checksum block would change.",
@@ -92,24 +92,6 @@
           "title": "How often to check",
           "description": "Cron expression. The default checks every 15 minutes.",
           "default": "*/15 * * * *"
-        },
-        "statusToken": {
-          "type": "string",
-          "title": "Progress page token",
-          "description": "Optional. Leave blank and this plugin sends nothing anywhere. Fill it in to watch progress in a browser; get a token from the plugin website.",
-          "default": ""
-        },
-        "relayUrl": {
-          "type": "string",
-          "title": "Where to send progress",
-          "description": "Change this to use your own server, an ntfy topic, or any webhook.",
-          "default": "https://navidrome-mood.312.dev"
-        },
-        "sendTrackTitles": {
-          "type": "boolean",
-          "title": "Include track names in progress updates",
-          "description": "Off by default, so only counts and cost ever leave your server.",
-          "default": false
         },
         "model": {
           "type": "string",
@@ -226,24 +208,6 @@
                   }
                 }
               }
-            }
-          ]
-        },
-        {
-          "type": "Group",
-          "label": "Watching progress (optional)",
-          "elements": [
-            {
-              "type": "Control",
-              "scope": "#/properties/statusToken"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/relayUrl"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/sendTrackTitles"
             }
           ]
         },
