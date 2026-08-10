@@ -21,9 +21,10 @@ repeating.
 
 ## What is not done
 
-0.2.0 is registered and disabled, pending approval of its permission set, so
-nothing is running. The local build is 0.3.0, so the package on the Mini is a
-version behind as well as disabled. See step 2.
+0.2.0 is what the Mini has. The local build is 0.3.2, which is three changes
+ahead: the files are the record rather than the key-value store, the model is
+sent a short handle instead of a file path, and the progress relay settings are
+gone. See step 2.
 
 `dryRun` is still on and the run counter still reads $24.98 of a $25 limit, so
 even once enabled it will write nothing and every batch will fail on the cap
@@ -34,7 +35,7 @@ a file, and the tags in the files are the only record this plugin keeps. Those
 tracks carry no mood tags and are ordinary candidates for the next pass.
 
 What that run did leave behind is about 4,200 per-track entries in the plugin's
-key-value store, roughly 1.6 MB. Nothing reads them any more. 0.3.0 deletes them
+key-value store, roughly 1.6 MB. Nothing reads them any more. 0.3.2 deletes them
 as it goes, 500 per load and 500 per auto-sync tick, and logs how many remain.
 
 It asks for 8 MB of storage purely so that clearing them has room to happen: a
@@ -61,8 +62,8 @@ is the right behaviour and it is silent: a disabled plugin never loads, so it
 logs nothing at all, which reads like a failed install rather than a consent
 prompt.
 
-Going from 0.2.0 to 0.3.0 drops the `kvstore` permission's 64 MB request, which
-is a change to the permission set, so it happens on this upgrade too. Enable it
+Going from 0.2.0 to 0.3.2 changes both the `kvstore` and `http` permissions, so
+it happens on this upgrade too. Enable it
 in Navidrome's plugin settings and confirm both flags:
 
 ```sh
@@ -92,8 +93,11 @@ allowance leaves room for the store to work while it drains.
 
 In Navidrome's plugin settings for navidrome-mood:
 
-- **Preview only, do not change my files**: turn **off**. This is what cost $25
-  last time. It generates labels and writes nothing, at full price.
+- **Preview only, do not change my files**: turn **off**, and check it after
+  saving. This has now silently cost money twice: $24.98 on a full pass, then
+  four more batches on 2026-08-10 that were labelled, billed and thrown away.
+  The batch line says `written=0` and a warning names the cause, but only if
+  someone reads it.
 - **Most this run may cost (USD)**: change it to a new value, e.g. `5`. Changing
   the limit is what starts the per-run counter fresh; leaving it at 25 leaves it
   at $24.98 spent and every batch will keep failing.
