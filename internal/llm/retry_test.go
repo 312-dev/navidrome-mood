@@ -112,3 +112,28 @@ func TestZeroLifetimeCapStillEnforcesTheRunLimit(t *testing.T) {
 		t.Fatalf("run limit not enforced when lifetime cap is unset: %v", err)
 	}
 }
+
+// A reply that arrived intact but did not fit the schema is worth another go.
+//
+// Observed on a live run: one batch in roughly 25 returned its labels array as a
+// JSON string rather than an array. The request was well-formed, so the same
+// request has a real chance of succeeding, and treating it as permanent means
+// paying for the batch and getting nothing back.
+func TestAMalformedReplyIsWorthRetrying(t *testing.T) {
+	err := fmt.Errorf("%w: could not parse tool input: %v", ErrMalformedReply,
+		"json: cannot unmarshal string into Go struct field .labels")
+	if !Retryable(err) {
+		t.Error("a schema mismatch is not retryable; a paid batch is thrown away")
+	}
+	// The things it must not be confused with. Each of these repeats identically
+	// however many times it is sent, so a retry is pure cost.
+	for name, permanent := range map[string]error{
+		"auth":      ErrAuth,
+		"budget":    ErrBudgetExhausted,
+		"truncated": ErrTruncated,
+	} {
+		if Retryable(permanent) {
+			t.Errorf("%s is retryable; retrying cannot change the outcome", name)
+		}
+	}
+}

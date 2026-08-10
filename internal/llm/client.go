@@ -51,6 +51,12 @@ var (
 	ErrTruncated   = errors.New("llm: response hit the host's 10 MB limit and was silently truncated")
 	ErrRateLimited = errors.New("llm: rate limited")
 	ErrAuth        = errors.New("llm: provider rejected the API key")
+	// ErrMalformedReply is a reply that arrived intact and did not fit the schema:
+	// the labels array delivered as a JSON string, a field of the wrong type, a
+	// tool call the model declined to make. The request was fine, so the same
+	// request has a real chance of working, which is what separates this from a
+	// 4xx.
+	ErrMalformedReply = errors.New("llm: reply did not match the schema")
 )
 
 // APIError carries a provider error in a form worth showing a user. Provider

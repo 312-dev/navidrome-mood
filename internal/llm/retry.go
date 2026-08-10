@@ -45,6 +45,14 @@ func Retryable(err error) bool {
 		// A 10 MB response will be 10 MB again. Retrying just re-buys it.
 		return false
 	}
+	if errors.Is(err, ErrMalformedReply) {
+		// Model output varies between identical requests, so the same call has a
+		// real chance of coming back well-formed. Observed on a live run: one
+		// batch in about 25 returned its labels array as a JSON string. Treating
+		// that as permanent means paying for the batch and getting nothing, and
+		// the strike counter already stops a provider that does it every time.
+		return true
+	}
 	return false
 }
 

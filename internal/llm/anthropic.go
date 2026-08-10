@@ -191,10 +191,10 @@ func (a *Anthropic) Label(system string, tracks []Track) (*Result, error) {
 			Labels []Label `json:"labels"`
 		}
 		if err := json.Unmarshal(c.Input, &wrapper); err != nil {
-			return &Result{Usage: usage}, fmt.Errorf("llm: could not parse tool input: %w", err)
+			return &Result{Usage: usage}, fmt.Errorf("%w: could not parse tool input: %w", ErrMalformedReply, err)
 		}
 		return &Result{Labels: wrapper.Labels, Usage: usage}, nil
 	}
 	return &Result{Usage: usage}, fmt.Errorf(
-		"llm: anthropic returned no %s tool call (stop_reason=%s)", labelToolName, out.StopReason)
+		"%w: anthropic returned no %s tool call (stop_reason=%s)", ErrMalformedReply, labelToolName, out.StopReason)
 }
