@@ -200,11 +200,17 @@ func warnAboutStaleRecords() {
 		_ = writeInt(keyRecordSchema, runner.RecordSchema)
 		return
 	}
-	logf(pdk.LogWarn, "%d tracks were labelled by an older version that wrote only the "+
-		"mood words. They are missing the five axes, tempo, vocal and vibe, which is "+
-		"everything a smart playlist filters on. Set 'Label my library' to 'everything' "+
-		"to bring them forward; tracks already carrying all ten tags are skipped and "+
-		"cost nothing.", len(known))
+	// Deliberately silent about what reached the files. A record from that shape
+	// means the model was paid to judge the track, and nothing more: the write
+	// may have put the mood words in the file, or preview mode may have written
+	// nothing at all, and this cannot tell the two apart without opening every
+	// file. Naming the judgement rather than the write is the part that is true
+	// either way, and the remedy is the same for both.
+	logf(pdk.LogWarn, "%d tracks were judged by an older version, before the five axes, "+
+		"tempo, vocal and vibe existed, which is everything a smart playlist filters "+
+		"on. Those values were never produced and cannot be recovered without asking "+
+		"again. Set 'Label my library' to 'everything' to bring them forward; tracks "+
+		"already carrying all ten tags are skipped and cost nothing.", len(known))
 }
 
 // lifetimeState reads total spend and its ceiling.
