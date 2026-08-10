@@ -124,14 +124,13 @@ func TestAutoSyncIgnoresFilesWithNoModTime(t *testing.T) {
 // kept per track, and a 9,195-track library needed 3.4 MB against Navidrome's
 // 1 MB default when it was.
 var kvKeys = map[string]bool{
-	"keyPending":        true,
-	"keyPendingRevibe":  true,
-	"keyPendingMigrate": true,
-	"keyBudget":         true,
-	"keySyncCursor":     true,
-	"keyMoodOnly":       true,
-	"keyStrikes":        true,
-	"keyHalted":         true,
+	"keyPending":     true,
+	"keyPendingFree": true,
+	"keyBudget":      true,
+	"keySyncCursor":  true,
+	"keyMoodOnly":    true,
+	"keyStrikes":     true,
+	"keyHalted":      true,
 }
 
 // The storage seam is host-only, so this asserts the key list rather than the
@@ -258,7 +257,7 @@ func TestConcurrencyDefaultsToOneAndIsClamped(t *testing.T) {
 
 // The free passes must not be able to spend money.
 //
-// That is the entire proposition of both modes: a radius is a calibration, and a
+// That is the entire proposition of both of them: a radius is a calibration, and a
 // calibration nobody can afford to apply is one nobody will ever change. It is
 // also what lets recomputation run while a halt is in force, since a halt exists
 // to stop money going out. The claim is load-bearing enough that a comment is
@@ -282,7 +281,7 @@ func TestRecomputingVibesCannotCallAProvider(t *testing.T) {
 		"Label":         "is the provider call itself",
 	}
 
-	free := map[string]bool{"executeRevibe": true, "executeMigrate": true}
+	free := map[string]bool{"executeFree": true}
 	found := map[string]bool{}
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
@@ -318,5 +317,49 @@ func TestRecomputingVibesCannotCallAProvider(t *testing.T) {
 		if !found[name] {
 			t.Fatalf("%s not found, so this guard is checking nothing", name)
 		}
+	}
+}
+
+// Every queue must fit inside the taskqueue permission's budget.
+//
+// maxConcurrency is a budget across ALL of a plugin's queues, not a ceiling per
+// queue: Navidrome sums the concurrency of every queue already created and
+// REFUSES to create one that does not fit, rather than clamping it to zero. So
+// registering the label queue at the full budget does not make labelling faster,
+// it makes the free queue impossible to create, and nothing says so at the time.
+//
+// That is not hypothetical. It shipped: with the label queue at 3 and two free
+// queues asking 4 each against a budget of 4, queue creation failed on load and
+// the only visible symptom arrived two steps later, as
+// `run: FAILED to start: enqueueing migrate batch 0: queue "free" does not exist`.
+func TestEveryQueueFitsInTheConcurrencyBudget(t *testing.T) {
+	// Across every value the setting can reach, including an install tuned for
+	// speed and one that has never been touched.
+	for configured := 1; configured <= maxConcurrency; configured++ {
+		got := labelConcurrencyFor(configured)
+		if got+freeConcurrency > maxConcurrency {
+			t.Errorf("with concurrency=%d the queues ask for %d workers against a "+
+				"budget of %d, so one of them will fail to register",
+				configured, got+freeConcurrency, maxConcurrency)
+		}
+		if got < 1 {
+			t.Errorf("with concurrency=%d the label queue is left with no workers", configured)
+		}
+	}
+
+	// And the manifest has to actually declare the budget the code assumes.
+	m := loadManifest(t)
+	perms := m["permissions"].(map[string]any)
+	tq, ok := perms["taskqueue"].(map[string]any)
+	if !ok {
+		t.Fatal("no taskqueue permission declared, so no queue can be created")
+	}
+	declared, ok := tq["maxConcurrency"].(float64)
+	if !ok {
+		t.Fatal("taskqueue declares no maxConcurrency")
+	}
+	if int(declared) != maxConcurrency {
+		t.Errorf("manifest declares maxConcurrency %d but the code budgets against %d",
+			int(declared), maxConcurrency)
 	}
 }

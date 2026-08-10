@@ -28,15 +28,11 @@ const (
 	keyPending = "run:pending"
 	keyBudget  = "run:budget"
 
-	// keyPendingRevibe is the same guard for recomputation, counted separately
-	// because the two queues are separate. Sharing one counter would let a
-	// finished revibe batch decrement a labelling run's depth and unblock a
-	// second enqueue of the whole library on top of the first.
-	keyPendingRevibe = "run:pending-revibe"
-
-	// keyPendingMigrate is the same guard for the rename pass, counted separately
-	// for the same reason.
-	keyPendingMigrate = "run:pending-migrate"
+	// keyPendingFree is the same guard for the no-cost passes, counted separately
+	// from keyPending because they run on their own queue. Sharing one counter
+	// would let a finished free batch decrement a labelling run's depth and
+	// unblock a second enqueue of the whole library on top of the first.
+	keyPendingFree = "run:pending-free"
 
 	// keySyncCursor is the modification time, in unix seconds, of the newest file
 	// auto-sync has already looked at. Everything at or below it has been checked
@@ -92,7 +88,7 @@ const (
 // guard before ever reaching the create call.
 func ensureQueue() error {
 	if err := host.TaskCreateQueue(queueLabel, host.QueueConfig{
-		Concurrency: int32(concurrency()),
+		Concurrency: int32(labelConcurrency()),
 		MaxRetries:  3,
 		BackoffMs:   5_000,
 		DelayMs:     500,
@@ -100,23 +96,45 @@ func ensureQueue() error {
 	}); err != nil {
 		return err
 	}
-	// The free passes read tags, do arithmetic and write a field or two, so a
-	// batch is a few hundred milliseconds against a labelling batch's thirteen
-	// seconds. Fixed concurrency rather than the configured one, because that
-	// setting exists to bound spend against the provider and there is no spend
-	// on either of these.
-	for _, name := range []string{queueRevibe, queueMigrate} {
-		if err := host.TaskCreateQueue(name, host.QueueConfig{
-			Concurrency: 4,
-			MaxRetries:  3,
-			BackoffMs:   5_000,
-			DelayMs:     500,
-			RetentionMs: 24 * 60 * 60 * 1000,
-		}); err != nil {
-			return err
-		}
+	// One worker, and that is the whole of the free queue's share. Navidrome
+	// budgets concurrency across all of a plugin's queues, so every slot here is
+	// one labelling cannot have; a free batch is a few hundred milliseconds
+	// against a labelling batch's thirteen seconds, so one worker still clears a
+	// library in minutes.
+	//
+	// Registered on every load whether or not a free pass is running. Queue
+	// creation is what subscribes a worker, and these tasks are durable, so a
+	// pass interrupted by a restart would otherwise resume with nothing serving
+	// it.
+	return host.TaskCreateQueue(queueFree, host.QueueConfig{
+		Concurrency: freeConcurrency,
+		MaxRetries:  3,
+		BackoffMs:   5_000,
+		DelayMs:     500,
+		RetentionMs: 24 * 60 * 60 * 1000,
+	})
+}
+
+// freeConcurrency is what the no-cost queue reserves out of the shared budget.
+const freeConcurrency = 1
+
+// labelConcurrency is the configured value, less the slot the free queue needs.
+//
+// Navidrome sums the concurrency of every queue a plugin has created and refuses
+// to create one that does not fit, returning an error rather than clamping to
+// zero. Registering the label queue at the full budget therefore does not slow
+// labelling down, it makes the free queue impossible to create, and the failure
+// surfaces two steps later as `queue "free" does not exist` when a pass tries to
+// enqueue. Taking the slot here instead is what keeps both queues creatable.
+func labelConcurrency() int { return labelConcurrencyFor(concurrency()) }
+
+// labelConcurrencyFor is the arithmetic on its own, so the budget can be checked
+// without a configured host to read the setting from.
+func labelConcurrencyFor(configured int) int {
+	if max := maxConcurrency - freeConcurrency; configured > max {
+		return max
 	}
-	return nil
+	return configured
 }
 
 // concurrency is how many batches may be in flight at once.
@@ -262,14 +280,15 @@ func startRun(mode string) error {
 		logf(pdk.LogInfo, "run: %d batches still queued, not starting another", pending)
 		return nil
 	}
-	// Both queues write tags into the same files, so recomputation waits for
-	// labelling either way round rather than racing it over one file.
-	revibePending, err := readInt(keyPendingRevibe)
+	// Every queue writes tags into the same files, so a free pass waits for
+	// labelling and for the other free pass rather than racing either over one
+	// file.
+	freePending, err := readInt(keyPendingFree)
 	if err != nil {
 		return err
 	}
-	if revibePending > 0 {
-		logf(pdk.LogInfo, "run: %d vibe recomputation batches still queued, not starting another", revibePending)
+	if freePending > 0 {
+		logf(pdk.LogInfo, "run: %d no-cost batches still queued, not starting another", freePending)
 		return nil
 	}
 
@@ -295,7 +314,7 @@ func startRun(mode string) error {
 	if mode == "migrate-tags" {
 		// Same reasoning as revibe below: everything past this point prices a
 		// provider call, and rewriting a tag under a different name makes none.
-		return enqueueFree(queueMigrate, keyPendingMigrate, library.Paths(files),
+		return enqueueFree(opMigrate, library.Paths(files),
 			"renaming tags on %d files in %d batches. This calls no provider and "+
 				"costs nothing: the values are already in your files and only their "+
 				"names change.")
@@ -310,7 +329,7 @@ func startRun(mode string) error {
 		// The whole library every time, with no skip list. Which tracks a radius
 		// change affects is not knowable without evaluating them, and the pass is
 		// free, so narrowing it could only ever leave a stale tag behind.
-		return enqueueFree(queueRevibe, keyPendingRevibe, library.Paths(files),
+		return enqueueFree(opRevibe, library.Paths(files),
 			"recomputing vibes for %d files in %d batches. This calls no provider "+
 				"and costs nothing: the regions are geometry over the five axes "+
 				"already in your files.")
@@ -458,32 +477,96 @@ func enqueue(paths []string) error {
 // leaves ample room.
 const freeBatchSize = 200
 
+// freeTask is one no-cost batch: which pass, and the files it covers.
+type freeTask struct {
+	Op    string   `json:"op"`
+	Paths []string `json:"paths"`
+}
+
 // enqueueFree splits paths into batches for a pass that spends nothing.
 //
 // message is a format string taking the file count and the batch count. It says
 // out loud that the pass is free, because the setting sits next to ones that are
 // not and the whole point of these passes is that nobody has to weigh the cost.
-func enqueueFree(queue, key string, paths []string, message string) error {
+func enqueueFree(op string, paths []string, message string) error {
 	var queued int
 	for i := 0; i < len(paths); i += freeBatchSize {
 		end := i + freeBatchSize
 		if end > len(paths) {
 			end = len(paths)
 		}
-		payload, err := json.Marshal(paths[i:end])
+		payload, err := json.Marshal(freeTask{Op: op, Paths: paths[i:end]})
 		if err != nil {
 			return err
 		}
-		if _, err := host.TaskEnqueue(queue, payload); err != nil {
-			return fmt.Errorf("enqueueing %s batch %d: %w", queue, queued, err)
+		if _, err := host.TaskEnqueue(queueFree, payload); err != nil {
+			return fmt.Errorf("enqueueing %s batch %d: %w", op, queued, err)
 		}
 		queued++
 	}
-	if err := writeInt(key, queued); err != nil {
+	if err := writeInt(keyPendingFree, queued); err != nil {
 		return err
 	}
 	logf(pdk.LogInfo, message, len(paths), queued)
 	return nil
+}
+
+// executeFree runs one no-cost batch, whichever pass it belongs to.
+//
+// The read is shared because both passes need the same thing: every file's
+// current tags. Which pass it is decides only what gets written back.
+func executeFree(payload []byte) (string, error) {
+	var task freeTask
+	if err := json.Unmarshal(payload, &task); err != nil {
+		return "", fmt.Errorf("bad payload: %w", err)
+	}
+
+	t, err := newFileTagger()
+	if err != nil {
+		return "", err
+	}
+	root := t.mounts[0]
+
+	tracks, failed := library.ReadTracks(os.DirFS(root), root, task.Paths)
+	for p, e := range failed {
+		logf(pdk.LogWarn, "%s: cannot read %s: %s", task.Op, p, e)
+	}
+
+	items := make([]runner.Item, 0, len(tracks))
+	for _, tr := range tracks {
+		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
+	}
+
+	dryRun := configBool("dryRun", false)
+	var summary string
+	var errs map[string]string
+
+	switch task.Op {
+	case opRevibe:
+		out := runner.Revibe(items, t, dryRun)
+		errs = out.Errors
+		summary = fmt.Sprintf("requested=%d unlabelled=%d unchanged=%d rewritten=%d cleared=%d errors=%d",
+			out.Requested, out.Unlabelled, out.Unchanged, out.Written, out.Cleared, len(out.Errors))
+	case opMigrate:
+		out := runner.MigrateTags(items, t, dryRun)
+		errs = out.Errors
+		summary = fmt.Sprintf("requested=%d already-current=%d renamed=%d errors=%d",
+			out.Requested, out.Current, out.Renamed, len(out.Errors))
+	default:
+		return "", fmt.Errorf("unknown free operation %q", task.Op)
+	}
+
+	decrement(keyPendingFree)
+	for path, why := range errs {
+		logf(pdk.LogWarn, "%s: could not write %s: %s", task.Op, path, why)
+	}
+	if dryRun {
+		logf(pdk.LogWarn, "%s: preview mode is on, so nothing was written. This pass "+
+			"costs nothing either way, so there is no bill to protect yourself from "+
+			"here.", task.Op)
+	}
+	logf(pdk.LogInfo, "%s: %s", task.Op, summary)
+	return summary, nil
 }
 
 // executeBatch labels one batch. Returns a human-readable summary, which the task
@@ -588,98 +671,6 @@ func executeBatch(payload []byte) (string, error) {
 		return summary, procErr
 	}
 	logf(pdk.LogInfo, "batch: %s", summary)
-	return summary, nil
-}
-
-// executeRevibe recomputes the `vibe` tag for one batch of files.
-//
-// No provider is built and no budget is loaded, and that is the point rather
-// than an omission: an install whose API key has expired, whose spend cap is
-// reached or whose provider is down can still apply a region change, because
-// nothing here asks anyone anything.
-func executeRevibe(payload []byte) (string, error) {
-	var paths []string
-	if err := json.Unmarshal(payload, &paths); err != nil {
-		return "", fmt.Errorf("bad payload: %w", err)
-	}
-
-	t, err := newFileTagger()
-	if err != nil {
-		return "", err
-	}
-	root := t.mounts[0]
-
-	tracks, failed := library.ReadTracks(os.DirFS(root), root, paths)
-	for p, e := range failed {
-		logf(pdk.LogWarn, "revibe: cannot read %s: %s", p, e)
-	}
-
-	items := make([]runner.Item, 0, len(tracks))
-	for _, tr := range tracks {
-		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
-	}
-
-	dryRun := configBool("dryRun", false)
-	out := runner.Revibe(items, t, dryRun)
-	decrement(keyPendingRevibe)
-
-	summary := fmt.Sprintf("requested=%d unlabelled=%d unchanged=%d rewritten=%d cleared=%d errors=%d",
-		out.Requested, out.Unlabelled, out.Unchanged, out.Written, out.Cleared, len(out.Errors))
-	for path, why := range out.Errors {
-		logf(pdk.LogWarn, "revibe: could not write %s: %s", path, why)
-	}
-	if dryRun {
-		logf(pdk.LogWarn, "revibe: preview mode is on, so nothing was written. "+
-			"The counts say what would change. Recomputation costs nothing either "+
-			"way, so there is no bill to protect yourself from here.")
-	}
-	logf(pdk.LogInfo, "revibe: %s", summary)
-	return summary, nil
-}
-
-// executeMigrate rewrites one batch of files' tags under their current names.
-//
-// Like executeRevibe, no provider is built and no budget is loaded. An install
-// whose key has expired or whose cap is reached can still bring its library
-// forward, which matters more here than there: until this has run, a labelling
-// pass sees those tracks as unjudged.
-func executeMigrate(payload []byte) (string, error) {
-	var paths []string
-	if err := json.Unmarshal(payload, &paths); err != nil {
-		return "", fmt.Errorf("bad payload: %w", err)
-	}
-
-	t, err := newFileTagger()
-	if err != nil {
-		return "", err
-	}
-	root := t.mounts[0]
-
-	tracks, failed := library.ReadTracks(os.DirFS(root), root, paths)
-	for p, e := range failed {
-		logf(pdk.LogWarn, "migrate: cannot read %s: %s", p, e)
-	}
-
-	items := make([]runner.Item, 0, len(tracks))
-	for _, tr := range tracks {
-		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
-	}
-
-	dryRun := configBool("dryRun", false)
-	out := runner.MigrateTags(items, t, dryRun)
-	decrement(keyPendingMigrate)
-
-	summary := fmt.Sprintf("requested=%d already-current=%d renamed=%d errors=%d",
-		out.Requested, out.Current, out.Renamed, len(out.Errors))
-	for path, why := range out.Errors {
-		logf(pdk.LogWarn, "migrate: could not write %s: %s", path, why)
-	}
-	if dryRun {
-		logf(pdk.LogWarn, "migrate: preview mode is on, so nothing was written. "+
-			"Renaming costs nothing either way, so there is no bill to protect "+
-			"yourself from here.")
-	}
-	logf(pdk.LogInfo, "migrate: %s", summary)
 	return summary, nil
 }
 

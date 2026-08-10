@@ -17,18 +17,24 @@ import (
 const (
 	queueLabel = "label"
 
-	// queueRevibe recomputes the `vibe` tag from axes already in the files. Its
-	// own queue rather than a flag on queueLabel, because the two differ in the
-	// thing that matters about a queue: a label task costs money and calls a
-	// provider, a revibe task does neither. Separate queues mean a retry, a
-	// concurrency setting or a stuck task on one cannot be mistaken for the other.
-	queueRevibe = "revibe"
+	// queueFree carries the passes that spend nothing: recomputing `vibe` from
+	// axes already in the files, and rewriting tags under their current names
+	// after a rename. Separate from queueLabel because a label task calls a
+	// provider and these do not, so they must not share a retry policy.
+	//
+	// ONE queue for both, because the taskqueue permission's maxConcurrency is a
+	// budget across all of a plugin's queues rather than a per-queue ceiling.
+	// Navidrome sums the concurrency of every existing queue and refuses to
+	// create one that does not fit, so a third queue is a slot taken away from
+	// labelling for good. The two never run at the same time anyway: each is a
+	// run mode and each is guarded by the pending counter, so a second queue
+	// would sit idle whenever the first was working.
+	queueFree = "free"
 
-	// queueMigrate rewrites tags under their current names after a rename. Its
-	// own queue for the same reason as queueRevibe: it calls no provider and
-	// spends nothing, so it must not share a retry or concurrency policy with
-	// work that does.
-	queueMigrate = "migrate"
+	// opRevibe and opMigrate say which of the two a task is. Carried in the
+	// payload rather than the queue name, which is what lets them share one.
+	opRevibe  = "revibe"
+	opMigrate = "migrate"
 
 	// scheduleSync keeps newly added music labelled. Fixed ID so re-registering
 	// on each load replaces the schedule rather than accumulating copies.
@@ -112,10 +118,8 @@ func (p *plugin) OnTaskExecute(req taskworker.TaskExecuteRequest) (string, error
 	switch req.QueueName {
 	case queueLabel:
 		return executeBatch(req.Payload)
-	case queueRevibe:
-		return executeRevibe(req.Payload)
-	case queueMigrate:
-		return executeMigrate(req.Payload)
+	case queueFree:
+		return executeFree(req.Payload)
 	default:
 		return "", fmt.Errorf("unknown queue %q", req.QueueName)
 	}
