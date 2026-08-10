@@ -45,6 +45,19 @@ Then open the plugin's settings in Navidrome and fill in the provider and API
 key. The form is ordered the way the work is: choose a provider, set your spend
 limits, then run it.
 
+**Grant write access in the same screen.** Navidrome gates a plugin's ability to
+modify your files behind a per-plugin permission, stored as `allow_write_access`
+and defaulting to off. Declaring `library: { filesystem: true }` in the manifest
+is this plugin asking; that toggle is you agreeing. Without it the labelling runs
+and costs money and every write is refused at the boundary.
+
+To check it from the command line rather than the UI:
+
+```bash
+sqlite3 -readonly <DataFolder>/navidrome.db \
+  "select id, enabled, allow_write_access from plugin;"
+```
+
 ## Declare the tags, or Navidrome will throw them away
 
 **Do this before running a labelling pass.** Navidrome only stores tags it has
@@ -205,7 +218,14 @@ Other things that stop it spending:
   that cannot be saved is not a limit.
 
 **Preview mode costs full price.** It protects your files, not your bill: the
-labels are still generated, they are simply not written.
+labels are still generated, they are simply not written. This is the expensive
+mistake to avoid, and it has already been made once: a library was labelled to
+$24.98 of a $25 limit with `dryRun` left on, and not one tag reached a file.
+Nothing warns you, because from the plugin's point of view it did exactly what
+it was told.
+
+Preview is worth paying for once, on `run: sample`, to see whether you like the
+labels. It is not worth paying for on `run: everything`.
 
 Start with `run: sample`. It labels 20 tracks spread across the library for a few
 cents, which is enough to decide whether you like the results.
