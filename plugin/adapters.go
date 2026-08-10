@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/navidrome/navidrome/plugins/pdk/go/host"
@@ -106,7 +107,15 @@ func (t *fileTagger) resolve(p string) (string, error) {
 	return "", fmt.Errorf("cannot find %q under any mount (tried %s)", p, strings.Join(tried, ", "))
 }
 
-func (t *fileTagger) ReadMood(p string) ([]string, error) {
+// vorbisKey is the field name a tag is stored under in the comment block.
+//
+// Vorbis field names are case-insensitive per spec and conventionally written in
+// upper case, which is what every other tagger produces and what this plugin has
+// always written for MOOD. Navidrome lower-cases them again on read, so the
+// contract's lower-case names are what the connector sees either way.
+func vorbisKey(name string) string { return strings.ToUpper(name) }
+
+func (t *fileTagger) ReadTags(p string, names ...string) (map[string][]string, error) {
 	full, err := t.resolve(p)
 	if err != nil {
 		return nil, err
@@ -121,21 +130,40 @@ func (t *fileTagger) ReadMood(p string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", full, err)
 	}
+	out := make(map[string][]string, len(names))
 	c, err := f.Comments()
 	if err != nil {
-		// A file with no comment block simply has no moods; that is not an error.
-		return nil, nil
+		// A file with no comment block simply carries none of these tags; that is
+		// not an error.
+		return out, nil
 	}
-	return c.Get("MOOD"), nil
+	for _, n := range names {
+		if v := c.Get(vorbisKey(n)); len(v) > 0 {
+			out[n] = v
+		}
+	}
+	return out, nil
 }
 
-func (t *fileTagger) WriteMood(p string, values []string) (string, error) {
+func (t *fileTagger) WriteTags(p string, tags map[string][]string) (string, error) {
 	full, err := t.resolve(p)
 	if err != nil {
 		return "", err
 	}
+	// Sorted, because Go randomises map iteration and Comments.Set appends a tag
+	// the file does not already carry. Iterating at random would order the nine
+	// new fields differently on every run, so relabelling an unchanged file would
+	// rewrite it to different bytes each time.
+	names := make([]string, 0, len(tags))
+	for n := range tags {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
 	strat, err := flac.UpdateTags(full, func(c *flac.Comments) error {
-		c.Set("MOOD", values...)
+		for _, n := range names {
+			c.Set(vorbisKey(n), tags[n]...)
+		}
 		return nil
 	})
 	return string(strat), err

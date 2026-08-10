@@ -41,6 +41,10 @@ func (p *plugin) OnInit() error {
 	logf(pdk.LogInfo, "navidrome-mood ready: %d mood terms, %d synonyms",
 		len(mood.Vocabulary), len(mood.Synonyms))
 
+	// Before anything else runs, because a library carried over from an older
+	// version looks completely labelled and is not.
+	warnAboutStaleRecords()
+
 	// The self-test is diagnostic and opt-in, run here rather than on a queue so
 	// its output lands next to the load line where anyone debugging will look.
 	// Failure is logged but never fatal: a plugin that refuses to load because a

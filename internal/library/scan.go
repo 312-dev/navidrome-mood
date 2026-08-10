@@ -1,12 +1,12 @@
 // Package library enumerates taggable tracks and reads their metadata straight
 // from the files.
 //
-// Enumeration goes through the filesystem rather than the Subsonic API, which is
-// a deliberate reversal of the original plan. Reading the files directly means
-// the paths are correct by construction (they come from the mount we will write
-// through), the metadata is whatever the tagger actually wrote, and no API
-// credentials are involved. The Subsonic API becomes necessary later, for
-// prompted playlists, where Navidrome's own track IDs are what matter.
+// Enumeration goes through the filesystem rather than the Subsonic API. Reading
+// the files directly means the paths are correct by construction, since they come
+// from the same mount the tagger writes through, and the metadata is whatever is
+// actually in the file rather than whatever Navidrome last indexed. No API
+// credentials are involved, which is why the plugin declares no subsonicapi
+// permission at all.
 package library
 
 import (

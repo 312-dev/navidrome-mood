@@ -88,15 +88,23 @@ func TestSchemaValidationActuallyRejects(t *testing.T) {
 	}
 }
 
+// subsonicapi and users travel together, in both directions.
+//
 // subsonicapi requires users, enforced by Manifest.Validate in Navidrome rather
-// than by the JSON schema - so the schema test above would not catch it.
-func TestSubsonicAPIDeclaresUsers(t *testing.T) {
+// than by the JSON schema, so the schema test above would not catch it. The
+// converse is not a load failure but is worse in its own way: users on its own
+// buys nothing, and someone reading the permission list before installing has no
+// way to tell an unused grant from a used one.
+func TestSubsonicAPIAndUsersTravelTogether(t *testing.T) {
 	perms, _ := loadManifest(t)["permissions"].(map[string]any)
-	if _, ok := perms["subsonicapi"]; !ok {
-		return
+	_, subsonic := perms["subsonicapi"]
+	_, users := perms["users"]
+
+	if subsonic && !users {
+		t.Error("subsonicapi is declared without users; Navidrome refuses to load this")
 	}
-	if _, ok := perms["users"]; !ok {
-		t.Fatal("subsonicapi is declared without users; Navidrome refuses to load this")
+	if users && !subsonic {
+		t.Error("users is declared without subsonicapi, so nothing can exercise it")
 	}
 }
 
@@ -120,20 +128,6 @@ func TestWebsiteAndRelayMatchThePluginName(t *testing.T) {
 	relay := props["relayUrl"].(map[string]any)["default"]
 	if relay != wantHost {
 		t.Errorf("relayUrl default = %v, want %q", relay, wantHost)
-	}
-}
-
-// The vocabulary override help text promises terms cannot contain a separator.
-// Keep the manifest and the code telling the same story.
-func TestManifestDocumentsSeparatorConstraint(t *testing.T) {
-	raw, err := os.ReadFile("manifest.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"semicolon", "slash", "comma"} {
-		if !strings.Contains(string(raw), want) {
-			t.Fatalf("manifest does not warn about %q in the vocabulary override", want)
-		}
 	}
 }
 

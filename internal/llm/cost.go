@@ -103,6 +103,13 @@ func Cost(model string, u Usage, discounted bool) (float64, error) {
 // earlier estimate of 65 produced a projection roughly 30% low. With 96 the
 // projection landed at $27.30 against $27.22 actual, inside 0.3%.
 //
+// That measurement is of a six-field record. The record now carries acousticness,
+// density, tempo and vocal as well, so 96 is a floor rather than a figure and the
+// projection reads low until someone re-derives it from a completed v2 run. The
+// spend CAP is unaffected either way - Budget charges from usage each reply
+// actually reports - but the pre-flight estimate shown before a run starts is
+// optimistic, so treat a projection close to the limit as over it.
+//
 // Re-derive this from recorded usage as runs complete rather than trusting it
 // forever - it will drift with the prompt and with the model.
 const OutputTokensPerTrack = 96

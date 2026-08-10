@@ -13,7 +13,6 @@ import (
 
 	"github.com/312-dev/navidrome-mood/internal/library"
 	"github.com/312-dev/navidrome-mood/internal/llm"
-	"github.com/312-dev/navidrome-mood/internal/mood"
 	"github.com/312-dev/navidrome-mood/internal/prompt"
 	"github.com/312-dev/navidrome-mood/internal/runner"
 )
@@ -24,6 +23,15 @@ const (
 	// library again on top of itself.
 	keyPending = "run:pending"
 	keyBudget  = "run:budget"
+
+	// keyRecordSchema is the record shape the last whole-library pass wrote.
+	//
+	// Records below runner.RecordSchema describe a track that was tagged with the
+	// mood words alone, and the runner sends those back through labelling. Nothing
+	// prompts it to: auto-sync only queues files it has never seen, so an upgraded
+	// install would sit there with nine tags missing per track and no error. This
+	// is what makes that state say so out loud.
+	keyRecordSchema = "records:schema"
 
 	// sampleSize is what "sample" mode labels: enough to judge whether the labels
 	// are any good, cheap enough to throw away.
@@ -149,6 +157,15 @@ func startRun(mode string) error {
 		paths = library.SampleAcross(paths, sampleSize)
 		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(paths))
 	}
+	if mode == "everything" {
+		// A whole-library pass is what brings older records forward, so it is the
+		// point the warning can stop. Recorded on enqueue rather than on
+		// completion: the batches are durable and the runner is what decides per
+		// track, so a restart mid-pass resumes rather than losing the work.
+		if err := writeInt(keyRecordSchema, runner.RecordSchema); err != nil {
+			return err
+		}
+	}
 
 	// Cost the run before committing to it. Refusing here is far cheaper than
 	// discovering the limit halfway through 460 batches.
@@ -163,6 +180,31 @@ func startRun(mode string) error {
 	}
 
 	return enqueue(paths)
+}
+
+// warnAboutStaleRecords reports tracks carried over from an older record shape.
+//
+// One KVStoreList, no file opens and no per-track reads, so it is cheap enough to
+// run on every load. It cannot say how many of those records are stale without
+// reading each one, which is why it names the fix rather than a count.
+func warnAboutStaleRecords() {
+	if n, err := readInt(keyRecordSchema); err != nil || n >= runner.RecordSchema {
+		return
+	}
+	known, err := host.KVStoreList(runner.RecordPrefix)
+	if err != nil {
+		return
+	}
+	if len(known) == 0 {
+		// Nothing has ever been labelled, so there is nothing to bring forward.
+		_ = writeInt(keyRecordSchema, runner.RecordSchema)
+		return
+	}
+	logf(pdk.LogWarn, "%d tracks were labelled by an older version that wrote only the "+
+		"mood words. They are missing the five axes, tempo, vocal and vibe, which is "+
+		"everything a smart playlist filters on. Set 'Label my library' to 'everything' "+
+		"to bring them forward; tracks already carrying all ten tags are skipped and "+
+		"cost nothing.", len(known))
 }
 
 // lifetimeState reads total spend and its ceiling.
@@ -234,12 +276,14 @@ func executeBatch(payload []byte) (string, error) {
 	lifetime, cap := lifetimeState()
 	budget.SetLifetime(lifetime, cap)
 
+	// Every track goes to the runner, which decides what to skip. A mood tag on
+	// disk is no longer enough on its own to answer that: a file this plugin
+	// labelled before the ten-tag write carries one and is still missing the nine
+	// that matter, and only the stored record says which of the two it is.
+	// Deciding here would filter those tracks out before the runner could tell.
 	skipTagged := configBool("skipTagged", true)
 	items := make([]runner.Item, 0, len(tracks))
 	for _, tr := range tracks {
-		if skipTagged && tr.HasMood {
-			continue
-		}
 		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path})
 	}
 
@@ -271,6 +315,12 @@ func executeBatch(payload []byte) (string, error) {
 		// letting the count quietly disagree.
 		logf(pdk.LogWarn, "batch: %d tracks came back unlabelled and will be retried: %v",
 			len(out.Unresolved), out.Unresolved)
+	}
+	for id, why := range out.Rejected {
+		// A rejected label is a different problem from a missing one: the model
+		// answered and the answer was out of range. Naming it is what makes a
+		// provider that consistently ignores the schema visible.
+		logf(pdk.LogWarn, "batch: rejected the label for %s: %s", id, why)
 	}
 	if procErr != nil {
 		// Only surface an error the queue will retry when retrying could actually
@@ -312,12 +362,13 @@ func buildProvider() (llm.Provider, error) {
 
 // buildPrompt assembles the system prompt.
 //
-// Curated playlists are not included yet: reading them needs the Subsonic API,
-// which is the next piece of work. Without them the model extends the built-in
-// vocabulary rather than the listener's own, which is the whole point of the
-// design - so this is a known degradation, not the intended end state.
+// There is no per-install context to pass and no setting for the vocabulary. A
+// user-supplied word has no anchor in mood-space: it can reach the `mood` tag,
+// but it cannot be placed in any vibe region and nothing downstream can reason
+// about where it sits relative to anything else. The 52 anchored terms are the
+// whole vocabulary, and they mean the same thing on every server.
 func buildPrompt() string {
-	return prompt.Build(prompt.Library{Vocabulary: mood.Vocabulary})
+	return prompt.Build(prompt.Library{})
 }
 
 func loadBudget(model string) (*llm.Budget, error) {

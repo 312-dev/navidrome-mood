@@ -11,6 +11,7 @@ import (
 	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
 
 	"github.com/312-dev/navidrome-mood/flac"
+	"github.com/312-dev/navidrome-mood/internal/runner"
 )
 
 // selfTestTag is deliberately not a real vocabulary term, so a leftover from an
@@ -68,11 +69,15 @@ func runSelfTest(write bool) error {
 	logf(pdk.LogInfo, "selftest: READ OK  audioAt=%d blocks=[%s]",
 		parsed.AudioOffset, strings.Join(blocks, " "))
 
-	existing, err := t.ReadMood(target)
+	// Only the mood tag is exercised. The point is whether a write lands through
+	// the mount at all, and one tag answers that as well as ten while leaving far
+	// less behind if the revert below cannot run.
+	existingTags, err := t.ReadTags(target, runner.TagMood)
 	if err != nil {
-		return fmt.Errorf("READ FAILED reading MOOD: %w", err)
+		return fmt.Errorf("READ FAILED reading %s: %w", runner.TagMood, err)
 	}
-	logf(pdk.LogInfo, "selftest: existing MOOD=%v", existing)
+	existing := existingTags[runner.TagMood]
+	logf(pdk.LogInfo, "selftest: existing %s=%v", runner.TagMood, existing)
 
 	if !write {
 		logf(pdk.LogInfo, "selftest: read-only mode, stopping before any write")
@@ -81,8 +86,8 @@ func runSelfTest(write bool) error {
 	if len(existing) > 0 {
 		// Refuse rather than clobber: this file already carries moods from
 		// somewhere, and a self-test must never be the thing that loses them.
-		return fmt.Errorf("selftest: %s already has MOOD=%v, refusing to write over it",
-			target, existing)
+		return fmt.Errorf("selftest: %s already has %s=%v, refusing to write over it",
+			target, runner.TagMood, existing)
 	}
 
 	// --- WRITE ---
@@ -90,7 +95,7 @@ func runSelfTest(write bool) error {
 	if err != nil {
 		return err
 	}
-	strat, err := t.WriteMood(target, []string{selfTestTag})
+	strat, err := t.WriteTags(target, map[string][]string{runner.TagMood: {selfTestTag}})
 	if err != nil {
 		return fmt.Errorf("WRITE FAILED on %s: %w", target, err)
 	}
@@ -103,25 +108,27 @@ func runSelfTest(write bool) error {
 		before.ModTime().Unix(), after.ModTime().Unix())
 
 	// --- VERIFY ---
-	got, err := t.ReadMood(target)
+	readBack, err := t.ReadTags(target, runner.TagMood)
 	if err != nil {
 		return fmt.Errorf("VERIFY FAILED: %w", err)
 	}
+	got := readBack[runner.TagMood]
 	if len(got) != 1 || got[0] != selfTestTag {
 		return fmt.Errorf("VERIFY FAILED: read back %v, want [%s]", got, selfTestTag)
 	}
 	logf(pdk.LogInfo, "selftest: VERIFY OK read back %v", got)
 
 	// --- REVERT ---
-	if _, err := t.WriteMood(target, nil); err != nil {
+	// A tag mapped to no values is removed, which is what puts the file back.
+	if _, err := t.WriteTags(target, map[string][]string{runner.TagMood: nil}); err != nil {
 		return fmt.Errorf("REVERT FAILED, %s still carries %s: %w", target, selfTestTag, err)
 	}
-	final, err := t.ReadMood(target)
+	reverted, err := t.ReadTags(target, runner.TagMood)
 	if err != nil {
 		return fmt.Errorf("REVERT VERIFY FAILED: %w", err)
 	}
-	if len(final) != 0 {
-		return fmt.Errorf("REVERT FAILED: %s still has MOOD=%v", target, final)
+	if final := reverted[runner.TagMood]; len(final) != 0 {
+		return fmt.Errorf("REVERT FAILED: %s still has %s=%v", target, runner.TagMood, final)
 	}
 	logf(pdk.LogInfo, "selftest: REVERT OK, file is back to its original state")
 	logf(pdk.LogInfo, "selftest: PASSED - the library mount is writable and the FLAC writer works through it")

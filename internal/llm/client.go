@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
 // Doer is the seam over Navidrome's http_send host service.
@@ -86,20 +88,119 @@ type Track struct {
 	Tags   []string `json:"tags,omitempty"`
 }
 
-// Label is one track's verdict. The numeric axes are 0-100 and give smart
-// playlists something continuous to filter on, which a controlled vocabulary
-// alone cannot.
+// Label is one track's verdict: its position in mood-space plus the words for it.
+//
+// The five axes are 0-100 and give smart playlists something continuous to filter
+// on, which a controlled vocabulary alone cannot. Tempo and vocal are closed sets
+// rather than numbers because neither is a magnitude: "rapped" is not more of
+// anything than "sung".
 type Label struct {
-	ID        string `json:"id"`
-	Energy    int    `json:"energy"`
-	Valence   int    `json:"valence"`
-	Intensity int    `json:"intensity"`
-	Organic   int    `json:"organic"`
+	ID           string `json:"id"`
+	Energy       int    `json:"energy"`
+	Valence      int    `json:"valence"`
+	Intensity    int    `json:"intensity"`
+	Acousticness int    `json:"acousticness"`
+	Density      int    `json:"density"`
+	Tempo        string `json:"tempo"`
+	Vocal        string `json:"vocal"`
 	// Moods are free-form descriptors. They are stored verbatim in kvstore and
 	// only mapped onto the controlled vocabulary on the way into the tag, so the
 	// enum can be revised later without re-paying for inference.
 	Moods []string `json:"moods"`
 	Times []string `json:"times,omitempty"`
+}
+
+// ErrInvalidLabel marks a reply the model got wrong in a way that cannot be
+// repaired locally.
+var ErrInvalidLabel = errors.New("llm: label is unusable")
+
+// Validate reports whether a label can be written to a file at all.
+//
+// The five axes plus tempo and vocal are read all-or-nothing by the connector, so
+// a bad value is rejected rather than clamped. Clamping an out-of-range axis to
+// 100 produces a plausible-looking wrong answer that nothing downstream can tell
+// apart from a real one; rejecting sends the track down the unresolved path,
+// where the gap stays visible and a later pass retries it.
+func (l Label) Validate() error {
+	var problems []string
+	for _, a := range []struct {
+		name string
+		v    int
+	}{
+		{"energy", l.Energy},
+		{"valence", l.Valence},
+		{"intensity", l.Intensity},
+		{"acousticness", l.Acousticness},
+		{"density", l.Density},
+	} {
+		if a.v < 0 || a.v > 100 {
+			problems = append(problems, fmt.Sprintf("%s is %d, outside 0-100", a.name, a.v))
+		}
+	}
+	if !inSet(mood.TempoFeels, mood.TempoFeel(l.Tempo)) {
+		problems = append(problems, fmt.Sprintf("tempo %q is not one of %s",
+			l.Tempo, join(mood.TempoFeels)))
+	}
+	if !inSet(mood.VocalKinds, mood.VocalKind(l.Vocal)) {
+		problems = append(problems, fmt.Sprintf("vocal %q is not one of %s",
+			l.Vocal, join(mood.VocalKinds)))
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w (%s): %s", ErrInvalidLabel, l.ID, strings.Join(problems, "; "))
+}
+
+// Point is where the label sits in mood-space, which is what region membership is
+// measured against.
+func (l Label) Point() mood.Point {
+	return mood.Point{
+		Axes: mood.Axes{
+			Energy:       l.Energy,
+			Valence:      l.Valence,
+			Intensity:    l.Intensity,
+			Acousticness: l.Acousticness,
+			Density:      l.Density,
+		},
+		Tempo: mood.TempoFeel(l.Tempo),
+		Vocal: mood.VocalKind(l.Vocal),
+	}
+}
+
+// KnownTimes drops time slots outside TimeSlots.
+//
+// Unlike the axes this is a filter rather than a rejection: moodtime sits outside
+// the all-or-nothing set, so a slot the connector has no name for costs nothing
+// to discard and does not make the rest of the track unusable.
+func KnownTimes(raw []string) []string {
+	var out []string
+	seen := make(map[string]bool, len(raw))
+	for _, r := range raw {
+		s := strings.ToLower(strings.TrimSpace(r))
+		if seen[s] || !inSet(TimeSlots, s) {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func inSet[T comparable](haystack []T, needle T) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func join[T ~string](vals []T) string {
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = string(v)
+	}
+	return strings.Join(out, ", ")
 }
 
 // Result pairs labels with the usage that produced them, so the caller can charge

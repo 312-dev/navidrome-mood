@@ -53,8 +53,9 @@ func (a *Anthropic) maxTokens() int {
 	if a.MaxTokens > 0 {
 		return a.MaxTokens
 	}
-	// ~96 output tokens per track measured, plus headroom for the tool-call
-	// envelope. A batch of 20 needs well under 4k.
+	// Around 96 output tokens per track measured on the six-field record, and the
+	// record now carries four more fields; call it 130 with the tool-call envelope
+	// on top. A batch of 20 still needs well under 4k. See OutputTokensPerTrack.
 	return 4096
 }
 
@@ -196,36 +197,4 @@ func (a *Anthropic) Label(system string, tracks []Track) (*Result, error) {
 	}
 	return &Result{Usage: usage}, fmt.Errorf(
 		"llm: anthropic returned no %s tool call (stop_reason=%s)", labelToolName, out.StopReason)
-}
-
-// labelSchema constrains the model's output. Ranges are declared so the provider
-// rejects out-of-band numbers rather than leaving the plugin to sanitise them.
-func labelSchema() json.RawMessage {
-	return json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "labels": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id":        {"type": "string"},
-          "energy":    {"type": "integer", "minimum": 0, "maximum": 100},
-          "valence":   {"type": "integer", "minimum": 0, "maximum": 100},
-          "intensity": {"type": "integer", "minimum": 0, "maximum": 100},
-          "organic":   {"type": "integer", "minimum": 0, "maximum": 100},
-          "moods":     {"type": "array", "minItems": 2, "maxItems": 4,
-                        "items": {"type": "string"},
-                        "description": "Short lowercase feeling descriptors."},
-          "times":     {"type": "array",
-                        "items": {"type": "string",
-                                  "enum": ["early morning","morning","midday","afternoon",
-                                           "golden hour","evening","late night"]}}
-        },
-        "required": ["id","energy","valence","intensity","organic","moods"]
-      }
-    }
-  },
-  "required": ["labels"]
-}`)
 }

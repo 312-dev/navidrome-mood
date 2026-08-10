@@ -2,30 +2,24 @@
   "name": "navidrome-mood",
   "author": "312.dev",
   "version": "0.1.0",
-  "description": "Labels your library by mood with an LLM and writes real MOOD tags into the files, so smart playlists can filter on feeling. Also keeps natural-language playlists refreshed on a schedule.",
+  "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://navidrome-mood.312.dev",
   "permissions": {
     "http": {
       "reason": "Send track metadata to the LLM provider you configure, and optionally post progress to a status endpoint you choose. No requiredHosts is declared, so any public host you point it at works while loopback and private addresses stay blocked."
     },
     "library": {
-      "reason": "Read and write MOOD tags directly in your audio files. Nothing else in the file is modified: audio bytes are never decoded, re-encoded, or moved, and the write is refused if the STREAMINFO checksum block would change.",
+      "reason": "Find your music, and write the mood tags directly into the audio files. Nothing else in the file is modified: audio bytes are never decoded, re-encoded, or moved, and the write is refused if the STREAMINFO checksum block would change.",
       "filesystem": true
     },
     "kvstore": {
-      "reason": "Remember which tracks are already labelled, the free-form descriptors behind each tag, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought."
+      "reason": "Remember each track's mood judgement, which tracks are done, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought."
     },
     "scheduler": {
-      "reason": "Poll the provider's batch API until results are ready, and refresh prompted playlists on the interval you set."
+      "reason": "Run the periodic check for newly added music, on the interval you set. Navidrome exposes no scan-completed hook, so polling is the only way to label new tracks without you starting a run by hand."
     },
     "taskqueue": {
       "reason": "Run labelling as resumable background work. Each plugin invocation is capped at 30 seconds by Navidrome, so a whole-library pass has to be many small tasks rather than one long one."
-    },
-    "subsonicapi": {
-      "reason": "Enumerate tracks to label, read your curated playlists as examples of your own mood vocabulary, and create the playlists you describe."
-    },
-    "users": {
-      "reason": "Required by Navidrome in order to call the Subsonic API on behalf of an admin user."
     }
   },
   "config": {
@@ -141,12 +135,6 @@
           "title": "Use the cheaper batch API",
           "description": "About half price, but results arrive over minutes to hours rather than immediately.",
           "default": true
-        },
-        "vocabulary": {
-          "type": "string",
-          "title": "Custom mood words",
-          "description": "Comma separated. Leave blank for the built-in set of 60. Individual words may not contain a comma, semicolon or slash, because Navidrome splits tag values on those.",
-          "default": ""
         },
         "selfTest": {
           "type": "string",
@@ -295,10 +283,6 @@
             {
               "type": "Control",
               "scope": "#/properties/batchSize"
-            },
-            {
-              "type": "Control",
-              "scope": "#/properties/vocabulary"
             },
             {
               "type": "Control",

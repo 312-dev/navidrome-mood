@@ -1,92 +1,112 @@
 package prompt
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
-func sampleLibrary() Library {
-	return Library{
-		Vibes: []Vibe{
-			{Name: "slow shreds", Total: 81, Samples: []string{
-				"Audioslave - Shadow On The Sun", "Pearl Jam - Black",
-			}},
-			{Name: "strum stories", Total: 229, Samples: []string{
-				"Jason Isbell - Cover Me Up",
-			}},
-		},
-		Vocabulary: mood.Vocabulary,
-		TopGenres:  []string{"Rock", "Electronic", "Hip Hop"},
-		Decades:    []string{"2010s", "2000s"},
+// lineFor returns the prompt line whose first word is term, which is how the
+// anchor block is laid out. Matching on the whole line rather than on Contains
+// keeps `driving` the vocabulary term from being satisfied by `driving` the
+// tempo feel.
+func lineFor(t *testing.T, prompt, term string) string {
+	t.Helper()
+	for _, line := range strings.Split(prompt, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == term {
+			return line
+		}
 	}
+	t.Fatalf("prompt has no line for term %q", term)
+	return ""
 }
 
 // Provider-side caching only works on a byte-identical prefix. A prompt that
 // varied between runs would silently cost about a fifth more, with nothing
-// visible except the bill.
+// visible except the bill. Twenty iterations because the usual cause is a range
+// over a map, and Go's randomised iteration order can repeat by luck.
 func TestBuildIsDeterministic(t *testing.T) {
-	lib := sampleLibrary()
-	first := Build(lib)
+	first := Build(Library{})
 	for i := 0; i < 20; i++ {
-		if got := Build(lib); got != first {
+		if got := Build(Library{}); got != first {
 			t.Fatalf("prompt changed between builds on iteration %d", i)
 		}
 	}
 }
 
-func TestPromptCarriesTheUsersOwnVocabulary(t *testing.T) {
-	got := Build(sampleLibrary())
-	// The vibe names are the point: they mean something specific in this library
-	// that no general taxonomy contains.
-	for _, want := range []string{"slow shreds", "strum stories", "Shadow On The Sun"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt does not mention %q", want)
-		}
+// The model can only use a term it has been shown, and a term missing from the
+// prompt fails silently: the label just comes back without it.
+func TestPromptCarriesEveryAnchor(t *testing.T) {
+	got := Build(Library{})
+
+	if len(mood.Vocabulary) != 52 {
+		t.Fatalf("vocabulary has %d terms, expected 52; update this test deliberately",
+			len(mood.Vocabulary))
 	}
-	if !strings.Contains(got, "81 tracks") {
-		t.Fatal("prompt omits playlist sizes, so the model cannot weigh them")
+	for _, term := range mood.Vocabulary {
+		lineFor(t, got, term)
 	}
 }
 
-// The instruction exists because of a measured behaviour: MOOD="up-tempo, driving"
-// became two moods in Navidrome and matched a rule for "up-tempo".
-func TestPromptForbidsSeparatorsInsideDescriptors(t *testing.T) {
-	got := Build(sampleLibrary())
-	for _, want := range []string{"comma", "semicolon", "slash"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt does not forbid %q inside a descriptor", want)
+// The gloss is why the anchor is not the only guidance the labeller gets. Shown
+// as a bare word list, the model would fall back on its own priors for what
+// `smouldering` means, which is the drift the fixed coordinates exist to stop.
+func TestEveryAnchorKeepsItsGlossAndCoordinates(t *testing.T) {
+	got := Build(Library{})
+
+	for _, term := range mood.Vocabulary {
+		a := mood.Anchors[term]
+		line := lineFor(t, got, term)
+
+		if !strings.Contains(line, a.Gloss) {
+			t.Errorf("term %q lost its gloss; line reads %q", term, line)
+		}
+		coords := fmt.Sprintf("e%d v%d i%d a%d d%d",
+			a.Energy, a.Valence, a.Intensity, a.Acousticness, a.Density)
+		if !strings.Contains(line, coords) {
+			t.Errorf("term %q is missing its coordinates %q; line reads %q", term, coords, line)
 		}
 	}
 }
 
-// Every output field must appear together under "For each track return:". An
-// earlier version emitted `times` after the vocabulary block, several paragraphs
-// away from the list it belongs to, which reads as a dangling instruction.
-func TestOutputFieldsStayInOneBlock(t *testing.T) {
-	got := Build(sampleLibrary())
+// Two runs of the model only agree on a scale that was stated. An axis named
+// without its ends is an axis each run calibrates for itself.
+func TestEveryAxisIsNamedWithItsScale(t *testing.T) {
+	got := Build(Library{})
 
-	header := strings.Index(got, "For each track return:")
-	times := strings.Index(got, "  times ")
-	vocab := strings.Index(got, "Prefer these descriptors")
+	for _, axis := range []string{"energy", "valence", "intensity", "acousticness", "density"} {
+		line := lineFor(t, got, axis)
+		for _, want := range []string{"0-100", "0 is", "100 is"} {
+			if !strings.Contains(line, want) {
+				t.Errorf("axis %q line does not state %q: %q", axis, want, line)
+			}
+		}
+	}
+}
 
-	if header < 0 || times < 0 || vocab < 0 {
-		t.Fatalf("missing section: header=%d times=%d vocab=%d", header, times, vocab)
+// The connector reads tempo and vocal all-or-nothing with the five axes, so a
+// value outside these sets makes the whole track count as unlabelled.
+func TestPromptListsTheClosedSetsExactly(t *testing.T) {
+	got := Build(Library{})
+
+	tempo := lineFor(t, got, "tempo")
+	for _, feel := range mood.TempoFeels {
+		if !strings.Contains(tempo, string(feel)) {
+			t.Errorf("tempo line omits %q: %q", feel, tempo)
+		}
 	}
-	if !(header < times && times < vocab) {
-		t.Fatalf("field block is split: header at %d, times at %d, vocabulary at %d; "+
-			"times must sit with the other fields", header, times, vocab)
-	}
-	// Nothing should separate the fields from each other.
-	block := got[header:times]
-	if strings.Contains(block, "\n\n") {
-		t.Fatalf("blank line inside the output field list:\n%s", block)
+	vocal := lineFor(t, got, "vocal")
+	for _, kind := range mood.VocalKinds {
+		if !strings.Contains(vocal, string(kind)) {
+			t.Errorf("vocal line omits %q: %q", kind, vocal)
+		}
 	}
 }
 
 func TestPromptListsTimeSlotsExactly(t *testing.T) {
-	got := Build(sampleLibrary())
+	got := Build(Library{})
 	for _, slot := range TimeSlots {
 		if !strings.Contains(got, slot) {
 			t.Fatalf("prompt omits time slot %q, so the model cannot use it", slot)
@@ -94,89 +114,92 @@ func TestPromptListsTimeSlotsExactly(t *testing.T) {
 	}
 }
 
-func TestBuildToleratesAnEmptyLibrary(t *testing.T) {
-	// A fresh install has no curated playlists yet. The prompt must still be
-	// usable rather than emitting a dangling header.
+// Every output field must appear together under "For each track return:". An
+// earlier version emitted `times` after the vocabulary block, several paragraphs
+// away from the list it belongs to, and the model started dropping it.
+func TestOutputFieldsStayInOneBlock(t *testing.T) {
 	got := Build(Library{})
-	if got == "" {
-		t.Fatal("empty library produced no prompt")
+
+	header := strings.Index(got, "For each track return:")
+	if header < 0 {
+		t.Fatal("prompt has no output field header")
 	}
-	if strings.Contains(got, "curated vibes") {
-		t.Fatal("prompt promises examples it does not have")
+
+	fields := []string{
+		"energy", "valence", "intensity", "acousticness", "density",
+		"tempo", "vocal", "moods", "times",
 	}
-	if !strings.Contains(got, "energy") {
-		t.Fatal("prompt lost its output contract")
+	prev := header
+	last := header
+	for _, f := range fields {
+		at := strings.Index(got, "\n  "+f+" ")
+		if at < 0 {
+			t.Fatalf("prompt does not ask for %q", f)
+		}
+		if at < prev {
+			t.Fatalf("field %q appears before the field ahead of it, at %d after %d", f, at, prev)
+		}
+		prev = at
+		last = at
+	}
+
+	// A blank line anywhere between the header and the last field means something
+	// has been wedged into the middle of the list.
+	if block := got[header:last]; strings.Contains(block, "\n\n") {
+		t.Fatalf("blank line inside the output field list:\n%s", block)
 	}
 }
 
-// Playlist files cluster by artist, so taking the head of a playlist teaches the
-// model that a vibe means one band.
-func TestSampleAcrossSpreadsRatherThanTakingTheHead(t *testing.T) {
-	items := make([]string, 100)
-	for i := range items {
-		items[i] = string(rune('a' + i/10)) // 10 of each letter, in runs
-	}
+// Vibes are computed by mood.VibesFor from the axes, not judged. Asking the
+// model for one would be asking it to guess the output of a function whose
+// inputs it has already supplied, and the two answers would disagree with no
+// correct side. This is the field most likely to be helpfully added back.
+func TestPromptNeverAsksForVibesOrRegions(t *testing.T) {
+	got := strings.ToLower(Build(Library{}))
 
-	got := SampleAcross(items, 5)
-	if len(got) != 5 {
-		t.Fatalf("got %d samples, want 5", len(got))
+	for _, forbidden := range []string{"vibe", "region"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("prompt mentions %q; membership is geometry, not a judgement", forbidden)
+		}
 	}
-	distinct := map[string]bool{}
-	for _, g := range got {
-		distinct[g] = true
-	}
-	if len(distinct) < 4 {
-		t.Fatalf("sample %v covers only %d distinct runs; it is taking the head",
-			got, len(distinct))
-	}
-	// Compare with the naive approach this exists to avoid.
-	head := items[:5]
-	headDistinct := map[string]bool{}
-	for _, h := range head {
-		headDistinct[h] = true
-	}
-	if len(headDistinct) != 1 {
-		t.Fatal("test fixture is wrong: the head should be a single run")
-	}
-}
-
-func TestSampleAcrossIsDeterministic(t *testing.T) {
-	items := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
-	first := SampleAcross(items, 4)
-	for i := 0; i < 10; i++ {
-		got := SampleAcross(items, 4)
-		for j := range first {
-			if got[j] != first[j] {
-				t.Fatalf("sampling varied between calls: %v then %v", first, got)
-			}
+	// Region names that are not also vocabulary terms or time slots. Their presence
+	// would mean the region taxonomy leaked into what the model is asked for.
+	for _, name := range []string{"wind down", "slow morning", "workout", "hype", "dinner"} {
+		if strings.Contains(got, name) {
+			t.Errorf("prompt names the region %q", name)
 		}
 	}
 }
 
-func TestSampleAcrossEdgeCases(t *testing.T) {
-	if got := SampleAcross([]string{}, 5); got != nil {
-		t.Fatalf("empty input gave %v", got)
+// The instruction exists because of a measured behaviour: MOOD="up-tempo, driving"
+// became two moods in Navidrome and matched a rule for "up-tempo".
+func TestPromptForbidsSeparatorsInsideTerms(t *testing.T) {
+	got := Build(Library{})
+	for _, want := range []string{"comma", "semicolon", "slash"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt does not forbid %q inside a term", want)
+		}
 	}
-	if got := SampleAcross([]string{"a"}, 0); got != nil {
-		t.Fatalf("zero n gave %v", got)
-	}
-	// Fewer items than requested returns all of them, not a padded slice.
-	if got := SampleAcross([]string{"a", "b"}, 5); len(got) != 2 {
-		t.Fatalf("got %v, want both items", got)
-	}
-	// Must never index out of range.
-	for n := 1; n <= 20; n++ {
-		for size := 1; size <= 20; size++ {
-			items := make([]int, size)
-			_ = SampleAcross(items, n)
+}
+
+// The vocabulary is defined rather than sampled, so the prompt must not describe
+// the collection it is labelling or invite the model to score relative to it.
+// It also has no listener to be personal about: this plugin runs on servers
+// whose owner nobody here has met.
+func TestPromptIsNotPersonalisedToOneListener(t *testing.T) {
+	got := strings.ToLower(Build(Library{}))
+	for _, forbidden := range []string{"the listener", " his ", " her ", "curated", "playlists"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("prompt contains %q, which has no referent on a stranger's server", forbidden)
 		}
 	}
 }
 
 // The prompt is the cached prefix on every request, so its size is a direct cost
-// input. This is a canary, not a hard limit.
+// input. This is a canary, not a hard limit: the anchor block is meant to be
+// large, and a jump past this means something other than an anchor grew.
 func TestPromptStaysReasonablySized(t *testing.T) {
-	got := Build(sampleLibrary())
+	got := Build(Library{})
 	if n := len(got); n > 12_000 {
 		t.Fatalf("prompt is %d bytes; it is the cached prefix of every request, so "+
 			"growth here multiplies across the whole pass", n)

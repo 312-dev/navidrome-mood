@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,7 +44,8 @@ func okAnthropicBody(labels []Label, stop string) map[string]any {
 }
 
 func TestAnthropicLabelParsesLabelsAndUsage(t *testing.T) {
-	want := []Label{{ID: "t1", Energy: 70, Valence: 40, Intensity: 60, Organic: 30,
+	want := []Label{{ID: "t1", Energy: 70, Valence: 40, Intensity: 60, Acousticness: 30,
+		Density: 65, Tempo: "driving", Vocal: "sung",
 		Moods: []string{"brooding", "heavy"}}}
 	d := &fakeDoer{resp: jsonResp(200, okAnthropicBody(want, "tool_use"))}
 	a := &Anthropic{Doer: d, APIKey: "k", Model: "claude-sonnet-5"}
@@ -52,8 +54,10 @@ func TestAnthropicLabelParsesLabelsAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Labels) != 1 || got.Labels[0].ID != "t1" || got.Labels[0].Energy != 70 {
-		t.Fatalf("labels not parsed: %+v", got.Labels)
+	// Every field, not just one: a field missing from the struct tags parses as a
+	// zero and reads as a real judgement of 0 downstream.
+	if len(got.Labels) != 1 || !reflect.DeepEqual(got.Labels[0], want[0]) {
+		t.Fatalf("labels not parsed: %+v, want %+v", got.Labels, want)
 	}
 	// Usage must come from the response, never from an estimate - it is what
 	// charges the budget.
