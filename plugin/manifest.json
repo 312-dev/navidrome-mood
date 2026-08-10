@@ -1,7 +1,7 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://github.com/312-dev/navidrome-mood",
   "permissions": {
@@ -72,7 +72,7 @@
         "dryRun": {
           "type": "boolean",
           "title": "Preview only, do not change my files",
-          "description": "Nothing is written to your music files. This costs the same as a real run, because the labels are still produced, and it leaves nothing behind: the tags in the files are the only record this plugin keeps, so a preview buys you a count and a cost figure rather than labels.",
+          "description": "Labels are generated and saved to the log, but nothing is written to your music files. Note this still costs the same to run, because the labels are still produced: it protects your files, not your bill. Turning it on caps a run at 20 tracks whatever Label my library says, because a preview over a whole library buys the same answer as a sample for the price of the whole library.",
           "default": false
         },
         "skipTagged": {

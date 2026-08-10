@@ -236,8 +236,11 @@ been made once: a library was labelled to $24.98 of a $25 limit with `dryRun`
 left on, and not one tag reached a file. Nothing warns you, because from the
 plugin's point of view it did exactly what it was told.
 
-Preview is worth paying for once, on `run: sample`, to see whether you like the
-labels. It is not worth paying for on `run: everything`.
+Preview is worth paying for once, to see whether you like the labels. It is not
+worth paying for over a whole library, which is why turning it on caps a run at
+20 tracks whatever `Label my library` says: a preview writes nothing, so running
+it over everything buys exactly the answer a sample buys, at the price of the
+whole library.
 
 Start with `run: sample`. It labels 20 tracks spread across the library for a few
 cents, which is enough to decide whether you like the results.

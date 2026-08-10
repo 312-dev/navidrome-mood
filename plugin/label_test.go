@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,5 +183,37 @@ func TestNothingIsStoredPerTrack(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+// A preview over the whole library is capped to a sample.
+//
+// The combination has no use: a preview writes nothing, so running it over
+// everything buys the same answer a sample buys for pennies, at the price of the
+// whole library. It has cost real money three times on one install, twice after
+// the warning naming the cause was added, which is why this is a bound rather
+// than another sentence in a log.
+func TestPreviewOverEverythingIsCapped(t *testing.T) {
+	src, err := os.ReadFile("label.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, `if mode == "sample" {`)
+	if i < 0 {
+		t.Fatal("cannot find the run-mode branch")
+	}
+	// The branch that is NOT sample mode has to narrow the file list too.
+	rest := s[i:]
+	end := strings.Index(rest, "paths := library.Paths(files)")
+	if end < 0 {
+		t.Fatal("cannot find the end of the run-mode branch")
+	}
+	branch := rest[:end]
+	if !strings.Contains(branch, `configBool("dryRun"`) {
+		t.Error("the run-mode branch does not consult dryRun, so a preview can run over the whole library")
+	}
+	if strings.Count(branch, "library.SampleAcross") < 2 {
+		t.Error("only one path narrows the file list; a preview over everything is unbounded")
 	}
 }

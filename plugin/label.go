@@ -226,6 +226,24 @@ func startRun(mode string) error {
 		// turned out to be one of three outliers in 9,195.
 		files = library.SampleAcross(files, sampleSize)
 		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(files))
+	} else if configBool("dryRun", false) {
+		// Preview over the whole library is the one settings combination with no
+		// use and a real cost. A preview answers "do I like these labels", which
+		// a sample answers for pennies; run over everything it buys the identical
+		// answer for the price of the whole pass and leaves nothing behind,
+		// because the tags in the files are the only record this plugin keeps.
+		//
+		// It is not hypothetical. It has happened three times on one install: a
+		// full pass to $24.98 of a $25 limit, then twice more after the warning
+		// that names the cause was added. The setting is the only one where the
+		// cautious-sounding choice is the expensive one, so bounding it is worth
+		// more than describing it again.
+		files = library.SampleAcross(files, sampleSize)
+		logf(pdk.LogWarn, "run: preview mode is on, so this is capped at %d files "+
+			"spread across the library. A preview writes nothing and costs full "+
+			"price, and running it over everything buys the same answer as a "+
+			"sample for the price of the whole library. Turn off 'Preview only, "+
+			"do not change my files' to label for real.", len(files))
 	}
 	paths := library.Paths(files)
 
