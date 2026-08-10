@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -10,26 +9,6 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/llm"
 	"github.com/312-dev/navidrome-mood/internal/mood"
 )
-
-type memStore struct {
-	m       map[string][]byte
-	setFail error
-}
-
-func newStore() *memStore { return &memStore{m: map[string][]byte{}} }
-
-func (s *memStore) Get(k string) ([]byte, bool, error) {
-	v, ok := s.m[k]
-	return v, ok, nil
-}
-
-func (s *memStore) Set(k string, v []byte) error {
-	if s.setFail != nil {
-		return s.setFail
-	}
-	s.m[k] = v
-	return nil
-}
 
 // fakeTagger stands in for the FLAC writer. `written` is the instruction it was
 // last handed; `existing` is the file that instruction landed on, with removals
@@ -46,24 +25,6 @@ func newTagger() *fakeTagger {
 		existing: map[string]map[string][]string{},
 		written:  map[string]map[string][]string{},
 	}
-}
-
-// setExisting marks a file as already carrying a tag, as Picard or beets would.
-func (f *fakeTagger) setExisting(path, name string, values ...string) {
-	if f.existing[path] == nil {
-		f.existing[path] = map[string][]string{}
-	}
-	f.existing[path][name] = values
-}
-
-func (f *fakeTagger) ReadTags(path string, names ...string) (map[string][]string, error) {
-	out := map[string][]string{}
-	for _, n := range names {
-		if v := f.existing[path][n]; len(v) > 0 {
-			out[n] = v
-		}
-	}
-	return out, nil
 }
 
 func (f *fakeTagger) WriteTags(path string, tags map[string][]string) (string, error) {
@@ -116,9 +77,34 @@ func item(id, path string) Item {
 	return Item{Track: llm.Track{ID: id, Title: id}, Path: path}
 }
 
-// label is a complete, valid v2 verdict. Tests that care about one field vary it
+// carrying is the same item with tags already on the file, which is the only
+// thing that decides whether it is labelled again.
+func carrying(id, path string, tags map[string][]string) Item {
+	it := item(id, path)
+	it.Tags = tags
+	return it
+}
+
+// fullSet is what this plugin leaves on a file it has finished with: the five
+// axes, tempo, vocal and a mood word, plus the two optional multi-valued tags.
+func fullSet() map[string][]string {
+	return map[string][]string{
+		TagEnergy:       {"70"},
+		TagValence:      {"40"},
+		TagIntensity:    {"60"},
+		TagAcousticness: {"30"},
+		TagDensity:      {"55"},
+		TagTempo:        {"mid"},
+		TagVocal:        {"sung"},
+		TagMood:         {"melancholy"},
+		TagTime:         {"evening"},
+		TagVibe:         {"wind down"},
+	}
+}
+
+// label is a complete, valid verdict. Tests that care about one field vary it
 // from here rather than building a partial label, because a zero-valued tempo or
-// vocal is now a rejection and would fail every test for the wrong reason.
+// vocal is a rejection and would fail every test for the wrong reason.
 func label(id string, moods ...string) llm.Label {
 	return llm.Label{
 		ID: id, Energy: 50, Valence: 50, Intensity: 50,
@@ -127,16 +113,16 @@ func label(id string, moods ...string) llm.Label {
 	}
 }
 
-func newRunner(p llm.Provider, st Store, tg Tagger, opts Options) *Runner {
-	return &Runner{Provider: p, Store: st, Tagger: tg, System: "sys", Opts: opts}
+func newRunner(p llm.Provider, tg Tagger, opts Options) *Runner {
+	return &Runner{Provider: p, Tagger: tg, System: "sys", Opts: opts}
 }
 
 func TestProcessLabelsAndWritesTags(t *testing.T) {
 	l := label("a", "sorrowful", "menacing")
 	l.Energy = 70
 	p := &stubProvider{labels: []llm.Label{l}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac")})
 	if err != nil {
@@ -159,32 +145,20 @@ func TestProcessLabelsAndWritesTags(t *testing.T) {
 	if v := got[TagTempo]; len(v) != 1 || v[0] != "mid" {
 		t.Fatalf("wrote %s=%v, want [mid]", TagTempo, v)
 	}
-
-	// The free-form descriptors must survive, so the enum can be revised later
-	// without paying for inference again.
-	raw, ok, _ := st.Get(recordKey("a"))
-	if !ok {
-		t.Fatal("no record stored")
-	}
-	var rec Record
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.Freeform) != 2 || rec.Freeform[0] != "sorrowful" {
-		t.Fatalf("free-form descriptors lost: %+v", rec.Freeform)
-	}
-	if !rec.Tagged {
-		t.Fatal("record does not reflect that the file was tagged")
+	// What was written has to read back as done, or the next pass pays again.
+	if !FullyLabelled(tg.onFile("/m/a.flac")) {
+		t.Fatalf("a file this runner just wrote does not read as labelled: %v",
+			tg.onFile("/m/a.flac"))
 	}
 }
 
 // The single most important correctness property in this package. A truncated or
-// partial response returns fewer labels than tracks sent; marking those tracks
-// done would mean they are never labelled and the gap is invisible.
+// partial response returns fewer labels than tracks sent; writing tags for those
+// tracks anyway would mean they are never labelled and the gap is invisible.
 func TestUnlabelledTracksAreNotMarkedDone(t *testing.T) {
 	p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac"), item("b", "/m/b.flac")})
 	if err != nil {
@@ -196,9 +170,6 @@ func TestUnlabelledTracksAreNotMarkedDone(t *testing.T) {
 	if len(out.Unresolved) != 1 || out.Unresolved[0] != "b" {
 		t.Fatalf("Unresolved = %v, want [b]", out.Unresolved)
 	}
-	if _, ok, _ := st.Get(recordKey("b")); ok {
-		t.Fatal("unlabelled track was recorded; a later pass would skip it forever")
-	}
 	if _, ok := tg.written["/m/b.flac"]; ok {
 		t.Fatal("unlabelled track was tagged")
 	}
@@ -206,16 +177,18 @@ func TestUnlabelledTracksAreNotMarkedDone(t *testing.T) {
 
 func TestSkipsTracksAlreadyTaggedByOtherTools(t *testing.T) {
 	p := &stubProvider{labels: []llm.Label{label("b", "warm")}}
-	st, tg := newStore(), newTagger()
-	tg.setExisting("/m/a.flac", TagMood, "chill") // written by Picard, say
-	r := newRunner(p, st, tg, Options{SkipTagged: true})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{SkipTagged: true})
 
-	out, err := r.Process([]Item{item("a", "/m/a.flac"), item("b", "/m/b.flac")})
+	// Written by Picard, say: a word and nothing to place it in mood-space.
+	picard := carrying("a", "/m/a.flac", map[string][]string{TagMood: {"chill"}})
+
+	out, err := r.Process([]Item{picard, item("b", "/m/b.flac")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Skipped != 1 {
-		t.Fatalf("Skipped = %d, want 1", out.Skipped)
+	if out.Skipped != 1 || out.MoodOnly != 1 {
+		t.Fatalf("outcome = %+v, want one skip counted as mood-only", out)
 	}
 	if p.gotN != 1 {
 		t.Fatalf("sent %d tracks to the provider, want 1: skipped tracks cost money", p.gotN)
@@ -225,25 +198,132 @@ func TestSkipsTracksAlreadyTaggedByOtherTools(t *testing.T) {
 	}
 }
 
-func TestRerunIsFreeWhenEverythingIsAlreadyDone(t *testing.T) {
-	p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{SkipTagged: true})
+// The rule the whole change exists for: a file carrying the full set is finished,
+// and re-paying for finished work is the expensive mistake.
+func TestAFullyLabelledTrackIsSkipped(t *testing.T) {
+	for _, skipTagged := range []bool{true, false} {
+		p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
+		tg := newTagger()
+		r := newRunner(p, tg, Options{SkipTagged: skipTagged})
 
-	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
-		t.Fatal(err)
+		out, err := r.Process([]Item{carrying("a", "/m/a.flac", fullSet())})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Skipped != 1 || p.called != 0 {
+			t.Fatalf("skipTagged=%v: Skipped = %d after %d provider calls, want 1 and 0",
+				skipTagged, out.Skipped, p.called)
+		}
+		if out.MoodOnly != 0 {
+			t.Errorf("skipTagged=%v: a finished track was counted as mood-only", skipTagged)
+		}
 	}
-	callsAfterFirst := p.called
+}
 
-	out, err := r.Process([]Item{item("a", "/m/a.flac")})
+// A track in no vibe region is a normal outcome, so an absent vibe must not make
+// a finished track look unfinished. Getting this wrong sends a large slice of any
+// library back through paid labelling on every pass, silently.
+func TestNoVibeStillCountsAsFullyLabelled(t *testing.T) {
+	tags := fullSet()
+	delete(tags, TagVibe)
+	delete(tags, TagTime)
+
+	p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
+
+	out, err := r.Process([]Item{carrying("a", "/m/a.flac", tags)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.called != callsAfterFirst {
-		t.Fatal("second run called the provider again; a re-run should cost nothing")
+	if out.Skipped != 1 || p.called != 0 {
+		t.Fatalf("a track with no vibe was relabelled: Skipped = %d, calls = %d",
+			out.Skipped, p.called)
 	}
-	if out.Skipped != 1 {
-		t.Fatalf("Skipped = %d, want 1", out.Skipped)
+}
+
+// The other half of the ambiguity rule. A mood word alone could be an older
+// version of this plugin or another tool entirely, so the setting decides.
+func TestMoodOnlyIsGovernedBySkipTagged(t *testing.T) {
+	moodOnly := func() map[string][]string {
+		return map[string][]string{TagMood: {"dark"}}
+	}
+
+	p := &stubProvider{labels: []llm.Label{label("a", "warm", "bright")}}
+	tg := newTagger()
+	r := newRunner(p, tg, Options{SkipTagged: false})
+	out, err := r.Process([]Item{carrying("a", "/m/a.flac", moodOnly())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Written != 1 {
+		t.Fatalf("Written = %d with skipTagged off, want 1", out.Written)
+	}
+	// The seven all-or-nothing values are what a mood word on its own lacks.
+	got := tg.onFile("/m/a.flac")
+	for _, name := range []string{
+		TagEnergy, TagValence, TagIntensity, TagAcousticness, TagDensity,
+		TagTempo, TagVocal,
+	} {
+		if len(got[name]) == 0 {
+			t.Errorf("relabelling a mood-only track did not write %q", name)
+		}
+	}
+
+	p = &stubProvider{labels: []llm.Label{label("a", "warm", "bright")}}
+	tg = newTagger()
+	r = newRunner(p, tg, Options{SkipTagged: true})
+	out, err = r.Process([]Item{carrying("a", "/m/a.flac", moodOnly())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Skipped != 1 || out.MoodOnly != 1 || p.called != 0 {
+		t.Fatalf("outcome = %+v after %d provider calls, want one mood-only skip and no call",
+			out, p.called)
+	}
+}
+
+// A value the connector would refuse leaves the track unlabelled, because the two
+// sides have to agree about what "labelled" means or half a library is invisible.
+func TestBrokenValuesMeanNotFullyLabelled(t *testing.T) {
+	cases := map[string]func(map[string][]string){
+		"axis above 100":    func(m map[string][]string) { m[TagEnergy] = []string{"140"} },
+		"axis below zero":   func(m map[string][]string) { m[TagValence] = []string{"-1"} },
+		"axis not a number": func(m map[string][]string) { m[TagDensity] = []string{"loud"} },
+		"axis missing":      func(m map[string][]string) { delete(m, TagIntensity) },
+		"tempo not in the set": func(m map[string][]string) {
+			m[TagTempo] = []string{"moderato"}
+		},
+		"vocal not in the set": func(m map[string][]string) { m[TagVocal] = []string{"screamed"} },
+		"no mood word":         func(m map[string][]string) { delete(m, TagMood) },
+		"empty mood word":      func(m map[string][]string) { m[TagMood] = []string{" "} },
+	}
+	for name, break_ := range cases {
+		tags := fullSet()
+		break_(tags)
+		if FullyLabelled(tags) {
+			t.Errorf("%s: still reported as fully labelled", name)
+		}
+
+		p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
+		r := newRunner(p, newTagger(), Options{})
+		if _, err := r.Process([]Item{carrying("a", "/m/a.flac", tags)}); err != nil {
+			t.Fatal(err)
+		}
+		if p.called != 1 {
+			t.Errorf("%s: the track was not sent for labelling", name)
+		}
+	}
+}
+
+// Whatever the plugin writes has to read back as labelled through the same rule,
+// including the tempo and vocal values another tool might have capitalised.
+func TestFullyLabelledAcceptsWhatOtherToolsWrite(t *testing.T) {
+	tags := fullSet()
+	tags[TagTempo] = []string{"Driving"}
+	tags[TagVocal] = []string{" INSTRUMENTAL "}
+	if !FullyLabelled(tags) {
+		t.Fatalf("case and whitespace made a labelled track look unlabelled: %v", tags)
 	}
 }
 
@@ -258,7 +338,7 @@ func TestFailedBatchStillChargesTheBudget(t *testing.T) {
 		usage: llm.Usage{Input: 100_000, Output: 50_000},
 		err:   errors.New("truncated at max_tokens"),
 	}
-	r := newRunner(p, newStore(), newTagger(), Options{})
+	r := newRunner(p, newTagger(), Options{})
 	r.Budget = b
 
 	_, err = r.Process([]Item{item("a", "/m/a.flac")})
@@ -276,7 +356,7 @@ func TestBudgetStopsTheBatchBeforeSpending(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
-	r := newRunner(p, newStore(), newTagger(), Options{})
+	r := newRunner(p, newTagger(), Options{})
 	r.Budget = b
 
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); !errors.Is(err, llm.ErrBudgetExhausted) {
@@ -287,22 +367,16 @@ func TestBudgetStopsTheBatchBeforeSpending(t *testing.T) {
 	}
 }
 
-func TestDescriptorsOutsideTheVocabularyAreKeptButNotTagged(t *testing.T) {
+func TestDescriptorsOutsideTheVocabularyAreNotTagged(t *testing.T) {
 	p := &stubProvider{labels: []llm.Label{label("a", "zorbular", "warm")}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
 	}
 	if got := tg.written["/m/a.flac"][TagMood]; len(got) != 1 || got[0] != "warm" {
 		t.Fatalf("%s = %v, want [warm] only", TagMood, got)
-	}
-	raw, _, _ := st.Get(recordKey("a"))
-	var rec Record
-	_ = json.Unmarshal(raw, &rec)
-	if len(rec.Freeform) != 2 {
-		t.Fatalf("unknown descriptor was discarded: %v", rec.Freeform)
 	}
 }
 
@@ -312,8 +386,8 @@ func TestDescriptorsOutsideTheVocabularyAreKeptButNotTagged(t *testing.T) {
 // good tags to avoid one empty one.
 func TestNoCanonicalTermsStillWritesThePosition(t *testing.T) {
 	p := &stubProvider{labels: []llm.Label{label("a", "zorbular")}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac")})
 	if err != nil {
@@ -336,7 +410,13 @@ func TestNoCanonicalTermsStillWritesThePosition(t *testing.T) {
 		t.Fatalf("%s = %v, want [50]", TagValence, v)
 	}
 	if out.Labelled != 1 {
-		t.Fatal("should still count as labelled and be recorded")
+		t.Fatal("should still count as labelled")
+	}
+	// The price of requiring a mood word: no word means the next pass judges this
+	// track again. It is the rare case, and the alternative is being unable to
+	// tell a finished track from a partial write.
+	if FullyLabelled(got) {
+		t.Fatal("a track with no mood word reads as labelled; the skip rule requires one")
 	}
 }
 
@@ -344,7 +424,7 @@ func TestWriteFailureSurfaces(t *testing.T) {
 	p := &stubProvider{labels: []llm.Label{label("a", "warm")}}
 	tg := newTagger()
 	tg.writeErr = errors.New("disk full")
-	r := newRunner(p, newStore(), tg, Options{})
+	r := newRunner(p, tg, Options{})
 
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err == nil {
 		t.Fatal("a failed tag write was swallowed")
@@ -353,7 +433,7 @@ func TestWriteFailureSurfaces(t *testing.T) {
 
 func TestEmptyBatchDoesNothing(t *testing.T) {
 	p := &stubProvider{}
-	r := newRunner(p, newStore(), newTagger(), Options{})
+	r := newRunner(p, newTagger(), Options{})
 	out, err := r.Process(nil)
 	if err != nil || out.Requested != 0 || p.called != 0 {
 		t.Fatalf("empty batch did something: %v %+v calls=%d", err, out, p.called)
@@ -382,14 +462,14 @@ func betweenRegions(id string) llm.Label {
 }
 
 // All ten for a track that lands in a region, because the connector reads the
-// five axes plus tempo and vocal all-or-nothing: nine of those seven written is a
+// five axes plus tempo and vocal all-or-nothing: six of those seven written is a
 // track it discards whole. This is the assertion that would have caught the
 // version of this package that wrote only the mood words.
 func TestEveryTagIsWrittenForALabelInARegion(t *testing.T) {
 	l := inHeavy("a")
 	p := &stubProvider{labels: []llm.Label{l}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
@@ -410,22 +490,6 @@ func TestEveryTagIsWrittenForALabelInARegion(t *testing.T) {
 			t.Errorf("%s = %v, want [%s]", name, got[name], v)
 		}
 	}
-
-	// TagsWritten is what a later pass reads back, so it has to be in a fixed
-	// order: Go randomises map iteration and an order that changed run to run
-	// would rewrite an unchanged file to different bytes every time.
-	raw, _, _ := st.Get(recordKey("a"))
-	var rec Record
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatal(err)
-	}
-	if !sort.StringsAreSorted(rec.TagsWritten) {
-		t.Errorf("TagsWritten is unordered: %v", rec.TagsWritten)
-	}
-	if len(rec.TagsWritten) != len(TagNames) {
-		t.Errorf("recorded %d tags written, want %d: %v",
-			len(rec.TagsWritten), len(TagNames), rec.TagsWritten)
-	}
 }
 
 // Nine for a track in no region, and nine is the right answer rather than a
@@ -443,7 +507,7 @@ func TestATrackInNoRegionGetsNineTagsAndNoVibeKey(t *testing.T) {
 
 	p := &stubProvider{labels: []llm.Label{l}}
 	tg := newTagger()
-	r := newRunner(p, newStore(), tg, Options{})
+	r := newRunner(p, tg, Options{})
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
 	}
@@ -469,10 +533,10 @@ func TestATrackInNoRegionGetsNineTagsAndNoVibeKey(t *testing.T) {
 // to have it rewritten. A stale vibe is confidently wrong, invisible on disk, and
 // there is nothing the connector could check it against.
 func TestRelabellingLeavesNoStaleValues(t *testing.T) {
-	st, tg := newStore(), newTagger()
+	tg := newTagger()
 
 	first := &stubProvider{labels: []llm.Label{inHeavy("a")}}
-	r := newRunner(first, st, tg, Options{})
+	r := newRunner(first, tg, Options{})
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +550,7 @@ func TestRelabellingLeavesNoStaleValues(t *testing.T) {
 
 	// Second pass, different music entirely, and SkipTagged off so it relabels.
 	second := &stubProvider{labels: []llm.Label{betweenRegions("a")}}
-	r = newRunner(second, st, tg, Options{})
+	r = newRunner(second, tg, Options{})
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
 	}
@@ -516,12 +580,14 @@ func TestRelabellingLeavesNoStaleValues(t *testing.T) {
 // The plugin owns ten names and must not reach past them. Anything else in the
 // file belongs to whatever wrote it.
 func TestRelabellingLeavesForeignTagsAlone(t *testing.T) {
-	st, tg := newStore(), newTagger()
-	tg.setExisting("/m/a.flac", "ARTIST", "someone")
-	tg.setExisting("/m/a.flac", "REPLAYGAIN_TRACK_GAIN", "-6.5 dB")
+	tg := newTagger()
+	tg.existing["/m/a.flac"] = map[string][]string{
+		"ARTIST":                {"someone"},
+		"REPLAYGAIN_TRACK_GAIN": {"-6.5 dB"},
+	}
 
 	p := &stubProvider{labels: []llm.Label{inHeavy("a")}}
-	r := newRunner(p, st, tg, Options{})
+	r := newRunner(p, tg, Options{})
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
 	}
@@ -586,8 +652,8 @@ func TestOutOfRangeAxisIsRejectedNotWritten(t *testing.T) {
 	good := label("b", "warm", "bright")
 
 	p := &stubProvider{labels: []llm.Label{bad, good}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac"), item("b", "/m/b.flac")})
 	if err != nil {
@@ -605,9 +671,6 @@ func TestOutOfRangeAxisIsRejectedNotWritten(t *testing.T) {
 	if _, ok := tg.written["/m/a.flac"]; ok {
 		t.Fatal("a rejected label was written to the file")
 	}
-	if _, ok, _ := st.Get(recordKey("a")); ok {
-		t.Fatal("a rejected label was recorded; a later pass would skip it forever")
-	}
 	// The good one in the same batch is unaffected.
 	if _, ok := tg.written["/m/b.flac"]; !ok {
 		t.Fatal("one bad label took the rest of the batch down with it")
@@ -618,8 +681,8 @@ func TestTempoOutsideTheClosedSetIsRejected(t *testing.T) {
 	bad := label("a", "warm", "bright")
 	bad.Tempo = "moderato"
 	p := &stubProvider{labels: []llm.Label{bad}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac")})
 	if err != nil {
@@ -646,7 +709,7 @@ func TestRejectedLabelsAreStillCharged(t *testing.T) {
 		labels: []llm.Label{bad},
 		usage:  llm.Usage{Input: 100_000, Output: 50_000},
 	}
-	r := newRunner(p, newStore(), newTagger(), Options{})
+	r := newRunner(p, newTagger(), Options{})
 	r.Budget = b
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac")})
@@ -677,8 +740,8 @@ func TestVibeComesFromTheGeometryNotTheModel(t *testing.T) {
 	l.Moods = []string{"party", "workout"}
 
 	p := &stubProvider{labels: []llm.Label{l}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{})
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
 
 	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
 		t.Fatal(err)
@@ -708,108 +771,23 @@ func TestVibeComesFromTheGeometryNotTheModel(t *testing.T) {
 	}
 }
 
-// A record written before the ten-tag write deserialises cleanly into the current
-// struct, with four axes reading 0 and tempo and vocal reading "". Trusting its
-// `tagged` would skip a track that only ever received the mood words.
-func TestStaleRecordsAreRelabelledRatherThanSkipped(t *testing.T) {
-	st, tg := newStore(), newTagger()
-	// Exactly what the previous schema wrote, including the mood tag on disk.
-	st.m[recordKey("a")] = []byte(
-		`{"id":"a","energy":70,"valence":40,"intensity":60,"organic":30,` +
-			`"freeform":["bleak"],"canonical":["dark"],"tagged":true,"tagsWritten":["dark"]}`)
-	tg.setExisting("/m/a.flac", TagMood, "dark")
-
-	p := &stubProvider{labels: []llm.Label{label("a", "warm", "bright")}}
-	r := newRunner(p, st, tg, Options{SkipTagged: true})
+// A preview protects the files, and because the files are the only record, it
+// leaves nothing behind at all. The next real run pays for the same tracks again,
+// which is worth being explicit about: it is the difference between a preview
+// being cheap and a preview being free, and it is neither.
+func TestDryRunWritesNothingAtAll(t *testing.T) {
+	p := &stubProvider{labels: []llm.Label{inHeavy("a")}}
+	tg := newTagger()
+	r := newRunner(p, tg, Options{DryRun: true})
 
 	out, err := r.Process([]Item{item("a", "/m/a.flac")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Skipped != 0 {
-		t.Fatal("a record from the old schema was treated as done; nine tags would stay missing")
-	}
-	if out.Written != 1 {
-		t.Fatalf("Written = %d, want 1", out.Written)
-	}
-	// The seven all-or-nothing tags are what the old record never had.
-	got := tg.onFile("/m/a.flac")
-	for _, name := range []string{
-		TagEnergy, TagValence, TagIntensity, TagAcousticness, TagDensity,
-		TagTempo, TagVocal,
-	} {
-		if len(got[name]) == 0 {
-			t.Errorf("relabelling a stale record did not write %q", name)
-		}
-	}
-	raw, _, _ := st.Get(recordKey("a"))
-	var rec Record
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Schema != RecordSchema {
-		t.Fatalf("Schema = %d, want %d; the next run would relabel it again",
-			rec.Schema, RecordSchema)
-	}
-}
-
-// The other half of the same rule: a current record must still stop a re-run
-// paying for the same track twice.
-func TestCurrentRecordsAreStillSkipped(t *testing.T) {
-	st, tg := newStore(), newTagger()
-	p := &stubProvider{labels: []llm.Label{label("a", "warm", "bright")}}
-	r := newRunner(p, st, tg, Options{SkipTagged: true})
-
-	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
-		t.Fatal(err)
-	}
-	out, err := r.Process([]Item{item("a", "/m/a.flac")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Skipped != 1 || p.called != 1 {
-		t.Fatalf("Skipped = %d after %d provider calls, want 1 and 1", out.Skipped, p.called)
-	}
-}
-
-// A dry run must protect the files without discarding what was paid for.
-func TestDryRunWritesNothingButRecordsTheWholeLabel(t *testing.T) {
-	l := label("a", "brooding", "heavy")
-	l.Energy, l.Valence, l.Intensity = 80, 30, 84
-	l.Acousticness, l.Density = 28, 78
-	l.Tempo, l.Vocal = "driving", "sung"
-
-	p := &stubProvider{labels: []llm.Label{l}}
-	st, tg := newStore(), newTagger()
-	r := newRunner(p, st, tg, Options{DryRun: true})
-
-	out, err := r.Process([]Item{item("a", "/m/a.flac")})
-	if err != nil {
-		t.Fatal(err)
+	if out.Labelled != 1 {
+		t.Fatalf("Labelled = %d, want 1: a preview still pays for the judgement", out.Labelled)
 	}
 	if out.Written != 0 || len(tg.written) != 0 {
 		t.Fatalf("dry run wrote to %d files", len(tg.written))
-	}
-	raw, ok, _ := st.Get(recordKey("a"))
-	if !ok {
-		t.Fatal("dry run discarded the label, so the real run would pay again")
-	}
-	var rec Record
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Tagged || len(rec.TagsWritten) != 0 {
-		t.Fatalf("dry run recorded the file as tagged: %+v", rec)
-	}
-	if rec.Acousticness != 28 || rec.Density != 78 || rec.Tempo != "driving" || rec.Vocal != "sung" {
-		t.Fatalf("dry run dropped part of the label: %+v", rec)
-	}
-	if len(rec.Vibes) == 0 {
-		t.Fatal("dry run skipped the vibe computation, which costs nothing to do")
-	}
-	// The record is what a later real run would write, so it must already carry
-	// all ten.
-	if len(rec.Tags()) != len(TagNames) {
-		t.Fatalf("record renders %d tags, want %d", len(rec.Tags()), len(TagNames))
 	}
 }

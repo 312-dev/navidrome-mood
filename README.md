@@ -227,12 +227,14 @@ Other things that stop it spending:
 - If the spend counter cannot be written to storage, everything stops. A limit
   that cannot be saved is not a limit.
 
-**Preview mode costs full price.** It protects your files, not your bill: the
-labels are still generated, they are simply not written. This is the expensive
-mistake to avoid, and it has already been made once: a library was labelled to
-$24.98 of a $25 limit with `dryRun` left on, and not one tag reached a file.
-Nothing warns you, because from the plugin's point of view it did exactly what
-it was told.
+**Preview mode costs full price and keeps nothing.** It protects your files, not
+your bill: the labels are still generated, they are simply not written, and
+since the tags in the files are the only record this plugin keeps, a preview
+leaves the library exactly as it found it. A real run afterwards pays for the
+same tracks again. This is the expensive mistake to avoid, and it has already
+been made once: a library was labelled to $24.98 of a $25 limit with `dryRun`
+left on, and not one tag reached a file. Nothing warns you, because from the
+plugin's point of view it did exactly what it was told.
 
 Preview is worth paying for once, on `run: sample`, to see whether you like the
 labels. It is not worth paying for on `run: everything`.
@@ -289,8 +291,15 @@ band as a `gt` and an `lt` under the same `all`, as above.
 
 `autoSync` is on by default and checks every 15 minutes. Navidrome exposes no
 scan-completed hook, so polling is as close to "label on ingest" as a plugin can
-get. The check is cheap when nothing has changed: one directory walk and one
-key-value listing, and no file is opened unless it is new.
+get. The check is cheap when nothing has changed: one directory walk comparing
+each file's modification time against the last check, and no file is opened
+unless it has been touched since.
+
+The first check on a library that has never been labelled has nothing to compare
+against, so it works through the whole library a few hundred files at a time,
+one tick after another. That is a consequence of Navidrome's 30-second ceiling
+on a plugin call: a check that tried to open nine thousand files would be killed
+partway and never get far enough to remember where it stopped.
 
 ## How the writing works
 
@@ -304,32 +313,58 @@ rename.
 
 Modification time is deliberately allowed to change. Navidrome's folder hash is
 over name, size and mtime, and an in-place tag edit does not change size, so
-mtime is the only signal that a rescan is needed.
-
-`skipTagged` is on by default and skips any track that already has a `mood`,
-including ones written by Picard, beets or by hand. This plugin adds `mood`; it
-does not own it.
+mtime is the only signal that a rescan is needed. It is also what the check for
+new music runs on, which means a track this plugin has just labelled comes back
+on the next check; that costs one metadata read, because it now reads as fully
+labelled and is skipped.
 
 If tagging is not working, `selfTest: read` opens one file and reports what it
 found, and `selfTest: write` additionally writes a marker tag, reads it back,
 removes it and checks the removal.
 
+## What counts as already labelled
+
+The tags are the only record. There is no database of what has been done: a
+track's own tags answer that, and they are read from the same metadata block the
+title and artist come from, so asking costs nothing beyond the read a labelling
+pass has to do anyway.
+
+A track is finished when it carries all seven of the values that are read
+all-or-nothing - the five axes, `moodtempo` and `moodvocal` - plus at least one
+`mood` word. `moodtime` and `vibe` are not required, because a track in no vibe
+region is a normal outcome and requiring one would send a large slice of any
+library back through paid labelling every pass. That is the same rule the
+navidrome-mcp connector applies when it reads these tags back, and the two have
+to agree or a track one of them calls labelled is invisible to the other.
+
+Finished tracks are always skipped, whatever `skipTagged` says, because redoing
+them costs money and changes nothing.
+
+`skipTagged` is on by default and decides the ambiguous case: a track carrying a
+`mood` and none of the seven. That is either an older version of this plugin or
+Picard, beets or a hand edit, and nothing can tell which, so leaving it alone is
+the default. Turning `skipTagged` off relabels those tracks, and doing so
+replaces whatever wrote them. This plugin adds `mood`; it does not own it.
+
+There is no version marker anywhere and there is deliberately no migration. A
+future eleventh tag would be absent from every track written today, and that
+absence is what would mark them as needing another pass - which is exactly how
+today's ten-tag tracks are told apart from an older build's `mood`-only ones.
+
 ## Known limits
 
-**The kvstore is the scaling limit.** One record per track, measured at about
-390 bytes, so roughly 3.4 MB for a 9,000 track library. Navidrome caps a
-plugin's storage at 1 MB by default and this plugin declares 64 MB, which covers
-about 170,000 tracks. Past that, labelling stops with `storage limit exceeded`
-and no tags are written, which looks like a labelling failure rather than a
-storage one.
-
-The record exists so the same track is not paid for twice. Since every value it
-holds is also written into the file, the file could serve as its own record and
-the per-track entry could go away entirely. That is the right fix and it has not
-been made.
-
-
 - **FLAC only**, as above.
+- **A track whose every descriptor missed the vocabulary is judged again.** All
+  2 to 4 words have to fold onto none of the 52 anchored terms for this to
+  happen, so it is rare, but such a track ends up with no `mood` word and a
+  `mood` word is part of what makes a track count as finished. The alternative
+  is being unable to tell a finished track from a partial write, which is worse.
+- **It asks for 8 MB of storage it does not need.** What has been labelled is
+  recorded in the files, so the plugin's own state is a few hundred bytes: a
+  spend counter, a queue depth, a watermark. The allowance is headroom for
+  deleting the per-track entries versions before 0.3.0 left behind, which it
+  does as it goes. Once those are gone the declaration can drop to Navidrome's
+  1 MB default.
 - **The batch API is not wired up.** The `batchMode` setting and the provider's
   `SupportsBatch` flag exist, but nothing currently submits work through a batch
   endpoint, so the 50% discount is not being taken. Cost figures here assume

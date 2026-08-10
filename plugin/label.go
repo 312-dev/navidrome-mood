@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/navidrome/navidrome/plugins/pdk/go/host"
 	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
@@ -17,6 +17,10 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/runner"
 )
 
+// Everything this plugin keeps in the kvstore is aggregate: a spend counter, a
+// queue depth, a halt flag, a watermark, one tally. It is a few hundred bytes
+// whatever the library's size, because what has been labelled is recorded in the
+// files themselves rather than here.
 const (
 	// keyPending guards re-enqueueing. OnInit re-runs on EVERY config save, so
 	// without this, changing any unrelated setting mid-run would queue the whole
@@ -24,20 +28,43 @@ const (
 	keyPending = "run:pending"
 	keyBudget  = "run:budget"
 
-	// keyRecordSchema is the record shape the last whole-library pass wrote.
-	//
-	// Records below runner.RecordSchema describe a track that was tagged with the
-	// mood words alone, and the runner sends those back through labelling. Nothing
-	// prompts it to: auto-sync only queues files it has never seen, so an upgraded
-	// install would sit there with nine tags missing per track and no error. This
-	// is what makes that state say so out loud.
-	keyRecordSchema = "records:schema"
+	// keySyncCursor is the modification time, in unix seconds, of the newest file
+	// auto-sync has already looked at. Everything at or below it has been checked
+	// and needs no further attention until something touches it again.
+	keySyncCursor = "sync:cursor"
+
+	// keyMoodOnly tallies tracks skipped because they carry a mood tag without
+	// the seven values a smart playlist filters on. It is what lets the load-time
+	// warning name a number; passes add to it and startRun resets it, so it says
+	// what labelling has actually seen rather than what is in the library.
+	keyMoodOnly = "run:moodonly"
 
 	// sampleSize is what "sample" mode labels: enough to judge whether the labels
 	// are any good, cheap enough to throw away.
 	sampleSize = 20
 
 	defaultBatchSize = 20
+
+	// oldRecordPrefix is the key prefix of the per-track entries some installs
+	// still hold. Nothing reads them - what has been labelled is answered from
+	// the files - but they count against the plugin's storage allowance, which
+	// is 1MB. A library that filled 3.4MB of entries leaves no room for the spend
+	// counter, and a spend counter that cannot be written halts everything.
+	oldRecordPrefix = "track:"
+
+	// sweepCap bounds how many of them one invocation deletes. Each delete is a
+	// host call into SQLite and a library's worth of them has no reason to fit in
+	// Navidrome's 30-second ceiling; the rest goes on the next load or the next
+	// auto-sync tick.
+	sweepCap = 500
+
+	// syncScanCap bounds how many files one auto-sync tick opens, which is what
+	// keeps the tick inside Navidrome's 30-second ceiling. It matters on the very
+	// first tick, when there is no watermark and every file in the library counts
+	// as changed: reading metadata for ~9,200 files takes well over a minute, so
+	// an uncapped tick would time out and never record a watermark to resume from.
+	// Whatever is left over is picked up on the next tick.
+	syncScanCap = 500
 )
 
 // ensureQueue registers the label queue and its worker.
@@ -58,16 +85,24 @@ func ensureQueue() error {
 	})
 }
 
-// syncNew queues only files this plugin has never seen.
+// syncNew queues files that have changed since the last check and are not
+// already labelled.
 //
 // The check must be cheap enough to run every few minutes, because that is what
-// makes it behave like "label on ingest" rather than "label eventually". Queuing
-// everything and letting each task skip the tagged ones would mean re-reading
-// metadata from ~9,200 files on every poll to discover that nothing changed.
+// makes it behave like "label on ingest" rather than "label eventually". Opening
+// every file to see whether it is labelled would mean reading metadata from
+// ~9,200 files on every poll to discover that nothing changed, which does not
+// fit in Navidrome's 30-second ceiling even once.
 //
-// So: one directory walk for paths, ONE KVStoreList call for what is already
-// known, and a set difference. No file is opened unless it is actually new.
+// So the walk stats rather than opens, and only files newer than the watermark
+// are opened at all. Writing a tag updates a file's mtime, so a track this
+// plugin has just labelled comes back on the next tick; that costs one metadata
+// read and nothing else, because it now reads as fully labelled and is skipped.
 func syncNew() error {
+	// First, and before the halt check: running out of storage is one of the
+	// things that halts a run, and this is what gives the space back.
+	reclaimPerTrackKeys()
+
 	if r := haltedReason(); r != "" {
 		return nil // stay stopped until the user changes something
 	}
@@ -85,38 +120,73 @@ func syncNew() error {
 	}
 	root := t.mounts[0]
 
-	paths, _, err := library.ListFiles(os.DirFS(root), root)
+	files, _, err := library.ListFiles(os.DirFS(root), root)
 	if err != nil {
 		return err
 	}
-
-	known, err := host.KVStoreList(runner.RecordPrefix)
+	cursor, err := readInt64(keySyncCursor)
 	if err != nil {
 		return err
 	}
-	seen := make(map[string]bool, len(known))
-	for _, k := range known {
-		seen[strings.TrimPrefix(k, runner.RecordPrefix)] = true
+	changed := changedSince(files, cursor, syncScanCap)
+	if len(changed) == 0 {
+		return nil // the whole poll cost one directory walk
 	}
 
+	tracks, failed := library.ReadTracks(os.DirFS(root), root, library.Paths(changed))
+	for p, e := range failed {
+		logf(pdk.LogWarn, "auto-sync: cannot read %s: %s", p, e)
+	}
 	var fresh []string
-	for _, p := range paths {
-		if !seen[p] {
-			fresh = append(fresh, p)
+	for _, tr := range tracks {
+		if !runner.FullyLabelled(tr.Tags) {
+			fresh = append(fresh, tr.Path)
 		}
 	}
-	if len(fresh) == 0 {
-		return nil // nothing new; the whole poll cost one walk and one list
+	if len(fresh) > 0 {
+		logf(pdk.LogInfo, "auto-sync: %d of %d changed file(s) still need labelling",
+			len(fresh), len(changed))
+		if err := enqueue(fresh); err != nil {
+			return err
+		}
 	}
-	logf(pdk.LogInfo, "auto-sync: %d new file(s) since last pass", len(fresh))
-	return enqueue(fresh)
+	// Last, so that a failure anywhere above leaves the watermark where it was
+	// and the same files are examined again rather than skipped forever.
+	return writeInt64(keySyncCursor, changed[len(changed)-1].ModTime.Unix())
+}
+
+// changedSince returns the files modified after cursor, oldest first, at most n
+// of them.
+//
+// The cap is extended to cover every file sharing the last second, because the
+// watermark has one-second resolution and cutting a second in half would leave
+// the remainder permanently below it. It also keeps a bulk import, where
+// thousands of files land on the same mtime, from pinning the watermark and
+// making every tick redo the same work.
+func changedSince(files []library.File, cursor int64, n int) []library.File {
+	var out []library.File
+	for _, f := range files {
+		if f.ModTime.Unix() > cursor {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.Before(out[j].ModTime) })
+	if len(out) <= n {
+		return out
+	}
+	end := n
+	for end < len(out) && out[end].ModTime.Unix() == out[end-1].ModTime.Unix() {
+		end++
+	}
+	return out[:end]
 }
 
 // startRun enumerates the library and enqueues labelling work.
 //
-// Enumeration lists paths only. Reading metadata for ~9,200 files takes over a
-// minute and this runs inside Navidrome's 30-second ceiling, so each task reads
-// metadata for its own batch instead.
+// Enumeration opens nothing: it is one directory walk for paths and modification
+// times. Reading metadata for ~9,200 files takes over a minute and this runs
+// inside Navidrome's 30-second ceiling, so each task reads metadata for its own
+// batch instead.
 func startRun(mode string) error {
 	if r := haltedReason(); r != "" {
 		logf(pdk.LogWarn, "run: not starting, work is halted: %s", describeHalt(r))
@@ -137,16 +207,16 @@ func startRun(mode string) error {
 	}
 	root := t.mounts[0]
 
-	paths, unsupported, err := library.ListFiles(os.DirFS(root), root)
+	files, unsupported, err := library.ListFiles(os.DirFS(root), root)
 	if err != nil {
 		return fmt.Errorf("enumerating %s: %w", root, err)
 	}
-	logf(pdk.LogInfo, "run: %d taggable files under %s", len(paths), root)
+	logf(pdk.LogInfo, "run: %d taggable files under %s", len(files), root)
 	for _, u := range unsupported {
 		// Reported, never silently dropped, so the counts reconcile.
 		logf(pdk.LogWarn, "run: skipping %s (%s)", u.Path, u.Reason)
 	}
-	if len(paths) == 0 {
+	if len(files) == 0 {
 		return fmt.Errorf("no FLAC files found under %s", root)
 	}
 
@@ -154,18 +224,10 @@ func startRun(mode string) error {
 		// Spread across the library rather than taking the head. Taking the head
 		// is how the mount self-test ended up generalising from one file that
 		// turned out to be one of three outliers in 9,195.
-		paths = library.SampleAcross(paths, sampleSize)
-		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(paths))
+		files = library.SampleAcross(files, sampleSize)
+		logf(pdk.LogInfo, "run: sample mode, %d files spread across the library", len(files))
 	}
-	if mode == "everything" {
-		// A whole-library pass is what brings older records forward, so it is the
-		// point the warning can stop. Recorded on enqueue rather than on
-		// completion: the batches are durable and the runner is what decides per
-		// track, so a restart mid-pass resumes rather than losing the work.
-		if err := writeInt(keyRecordSchema, runner.RecordSchema); err != nil {
-			return err
-		}
-	}
+	paths := library.Paths(files)
 
 	// Cost the run before committing to it. Refusing here is far cheaper than
 	// discovering the limit halfway through 460 batches.
@@ -179,38 +241,59 @@ func startRun(mode string) error {
 		return fmt.Errorf("refusing to start: %w", err)
 	}
 
+	// The tally is what this pass finds, not the sum of every pass before it.
+	if err := writeInt(keyMoodOnly, 0); err != nil {
+		return err
+	}
 	return enqueue(paths)
 }
 
-// warnAboutStaleRecords reports tracks carried over from an older record shape.
+// reclaimPerTrackKeys deletes per-track entries the store is still holding.
 //
-// One KVStoreList, no file opens and no per-track reads, so it is cheap enough to
-// run on every load. It cannot say how many of those records are stale without
-// reading each one, which is why it names the fix rather than a count.
-func warnAboutStaleRecords() {
-	if n, err := readInt(keyRecordSchema); err != nil || n >= runner.RecordSchema {
+// Run from both the load path and the auto-sync tick so it finishes on its own:
+// a library's worth of them takes several passes at sweepCap each, and an install
+// where nobody touches a setting again would otherwise stay full forever. Silent
+// when there is nothing to do, which is the usual case, so it costs one list.
+func reclaimPerTrackKeys() {
+	keys, err := host.KVStoreList(oldRecordPrefix)
+	if err != nil || len(keys) == 0 {
 		return
 	}
-	known, err := host.KVStoreList(runner.RecordPrefix)
-	if err != nil {
+	n := len(keys)
+	if n > sweepCap {
+		n = sweepCap
+	}
+	for _, k := range keys[:n] {
+		if err := host.KVStoreDelete(k); err != nil {
+			logf(pdk.LogWarn, "could not reclaim %s: %v", k, err)
+			return
+		}
+	}
+	logf(pdk.LogInfo, "reclaimed %d of %d per-track storage entries, which nothing "+
+		"reads: a track's own tags are what say whether it has been labelled", n, len(keys))
+}
+
+// warnAboutPartialLabels reports tracks left alone because they carry a mood tag
+// and nothing else.
+//
+// One kvstore read, no file opens, so it is cheap enough to run on every load.
+// It says nothing about who wrote those mood tags, because nothing can tell: an
+// older version of this plugin wrote the word alone, and so do Picard, beets and
+// a person editing a file by hand. That ambiguity is the whole reason the
+// decision is handed back to the user, and it is why the warning has to name
+// what turning the setting off would cost as well as what it would fix.
+func warnAboutPartialLabels() {
+	n, err := readInt(keyMoodOnly)
+	if err != nil || n <= 0 {
 		return
 	}
-	if len(known) == 0 {
-		// Nothing has ever been labelled, so there is nothing to bring forward.
-		_ = writeInt(keyRecordSchema, runner.RecordSchema)
-		return
-	}
-	// Deliberately silent about what reached the files. A record from that shape
-	// means the model was paid to judge the track, and nothing more: the write
-	// may have put the mood words in the file, or preview mode may have written
-	// nothing at all, and this cannot tell the two apart without opening every
-	// file. Naming the judgement rather than the write is the part that is true
-	// either way, and the remedy is the same for both.
-	logf(pdk.LogWarn, "%d tracks were judged by an older version, before the five axes, "+
-		"tempo, vocal and vibe existed, which is everything a smart playlist filters "+
-		"on. Those values were never produced and cannot be recovered without asking "+
-		"again. Set 'Label my library' to 'everything' to bring them forward; tracks "+
-		"already carrying all ten tags are skipped and cost nothing.", len(known))
+	logf(pdk.LogWarn, "labelling has found %d tracks carrying a mood tag without the five "+
+		"axes, tempo and vocal, which is everything a smart playlist filters on. Nothing "+
+		"can tell whether an older version of this plugin wrote those words or Picard, "+
+		"beets or you did, so they are left alone while 'Leave existing mood tags alone' "+
+		"is on. Turning it off sends them through labelling again, and also replaces any "+
+		"mood tag another tool wrote. Tracks already carrying the full set are skipped "+
+		"either way and cost nothing.", n)
 }
 
 // lifetimeState reads total spend and its ceiling.
@@ -282,22 +365,20 @@ func executeBatch(payload []byte) (string, error) {
 	lifetime, cap := lifetimeState()
 	budget.SetLifetime(lifetime, cap)
 
-	// Every track goes to the runner, which decides what to skip. A mood tag on
-	// disk is no longer enough on its own to answer that: a file this plugin
-	// labelled before the ten-tag write carries one and is still missing the nine
-	// that matter, and only the stored record says which of the two it is.
-	// Deciding here would filter those tracks out before the runner could tell.
+	// Every track goes to the runner, which decides what to skip from the tags the
+	// read above already produced. Deciding here would mean two places holding the
+	// same rule, and the expensive way for them to disagree is the one that sends
+	// finished tracks back through paid labelling.
 	skipTagged := configBool("skipTagged", true)
 	dryRun := configBool("dryRun", false)
 	items := make([]runner.Item, 0, len(tracks))
 	for _, tr := range tracks {
-		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path})
+		items = append(items, runner.Item{Track: tr.Meta, Path: tr.Path, Tags: tr.Tags})
 	}
 
 	r := &runner.Runner{
 		Provider: provider,
 		Budget:   budget,
-		Store:    kvStore{},
 		Tagger:   t,
 		System:   buildPrompt(),
 		Opts: runner.Options{
@@ -314,6 +395,7 @@ func executeBatch(payload []byte) (string, error) {
 	persistSpend(budget)
 	recordOutcome(out.Cost, out.Labelled)
 	decrement(keyPending)
+	addInt(keyMoodOnly, out.MoodOnly)
 
 	summary := fmt.Sprintf("requested=%d skipped=%d labelled=%d written=%d unresolved=%d cost=$%.4f",
 		out.Requested, out.Skipped, out.Labelled, out.Written, len(out.Unresolved), out.Cost)
@@ -429,6 +511,35 @@ func readInt(key string) (int, error) {
 
 func writeInt(key string, n int) error {
 	return host.KVStoreSet(key, []byte(strconv.Itoa(n)))
+}
+
+// readInt64 and writeInt64 exist for the sync watermark. GOARCH=wasm is 32-bit,
+// so a unix time stored through readInt would overflow in 2038.
+func readInt64(key string) (int64, error) {
+	raw, ok, err := host.KVStoreGet(key)
+	if err != nil || !ok {
+		return 0, err
+	}
+	n, err := strconv.ParseInt(string(raw), 10, 64)
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
+}
+
+func writeInt64(key string, n int64) error {
+	return host.KVStoreSet(key, []byte(strconv.FormatInt(n, 10)))
+}
+
+func addInt(key string, delta int) {
+	if delta == 0 {
+		return
+	}
+	n, err := readInt(key)
+	if err != nil {
+		return
+	}
+	_ = writeInt(key, n+delta)
 }
 
 func decrement(key string) {

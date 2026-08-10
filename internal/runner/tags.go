@@ -1,8 +1,11 @@
 package runner
 
 import (
-	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/312-dev/navidrome-mood/internal/llm"
+	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
 // The ten tag names written into every labelled file.
@@ -32,8 +35,8 @@ const (
 	TagVibe         = "vibe"
 )
 
-// TagNames lists all ten in sorted order, for callers that need to name the whole
-// set rather than one tag.
+// TagNames lists all ten, for callers that need to name the whole set rather
+// than one tag: the write, and the read that decides what is already labelled.
 var TagNames = []string{
 	TagMood, TagEnergy, TagValence, TagIntensity, TagAcousticness,
 	TagDensity, TagTempo, TagVocal, TagTime, TagVibe,
@@ -51,7 +54,7 @@ const MoodTermCap = 4
 // nearest three are the ones a playlist would actually reach for.
 const MaxVibes = 3
 
-// Tags renders the record as the write to perform, naming all ten every time.
+// tagsFor renders a verdict as the write to perform, naming all ten every time.
 //
 // Naming all ten is what makes a relabel a REPLACE rather than a merge. A track
 // that used to land in `melancholy` and now lands nowhere near it must lose that
@@ -66,32 +69,84 @@ const MaxVibes = 3
 //
 // Ten names is also the blast radius. Nothing else in the file is named here, so
 // nothing else can be touched.
-func (r Record) Tags() map[string][]string {
+func tagsFor(l llm.Label) map[string][]string {
 	return map[string][]string{
-		TagEnergy:       {strconv.Itoa(r.Energy)},
-		TagValence:      {strconv.Itoa(r.Valence)},
-		TagIntensity:    {strconv.Itoa(r.Intensity)},
-		TagAcousticness: {strconv.Itoa(r.Acousticness)},
-		TagDensity:      {strconv.Itoa(r.Density)},
-		TagTempo:        {r.Tempo},
-		TagVocal:        {r.Vocal},
-		TagMood:         r.Canonical,
-		TagTime:         r.Times,
-		TagVibe:         r.Vibes,
+		TagEnergy:       {strconv.Itoa(l.Energy)},
+		TagValence:      {strconv.Itoa(l.Valence)},
+		TagIntensity:    {strconv.Itoa(l.Intensity)},
+		TagAcousticness: {strconv.Itoa(l.Acousticness)},
+		TagDensity:      {strconv.Itoa(l.Density)},
+		TagTempo:        {l.Tempo},
+		TagVocal:        {l.Vocal},
+		TagMood:         mood.TagValues(l.Moods, MoodTermCap),
+		TagTime:         llm.KnownTimes(l.Times),
+		TagVibe:         vibesFor(l),
 	}
 }
 
-// writtenNames lists the tags a write actually left on the file, which is not the
-// same as the names it was given: a name with no values is a removal.
+// FullyLabelled reports whether a file's own tags already carry a complete
+// label, which is what makes a second pass over that track free.
 //
-// Sorted, because Go randomises map iteration and this is recorded per track.
-func writtenNames(tags map[string][]string) []string {
-	names := make([]string, 0, len(tags))
-	for n, v := range tags {
-		if len(v) > 0 {
-			names = append(names, n)
+// The rule is the connector's rule. navidrome-mcp/src/moodtags.ts reads the five
+// axes plus moodtempo and moodvocal all-or-nothing and treats moodtime and vibe
+// as optional, and the two sides have to agree or a track one of them calls
+// labelled is unlabelled to the other. `vibe` in particular must stay optional:
+// belonging to no region is a normal outcome that no value can express, so
+// requiring it would send a large slice of any library back through paid
+// labelling on every pass.
+//
+// A mood word is required on top of the connector's seven, because `mood` is the
+// tag the "leave existing mood tags alone" setting is defined against and the
+// two rules have to meet. The cost is that a track whose every descriptor fell
+// outside the 52-term vocabulary is judged again on the next pass.
+func FullyLabelled(tags map[string][]string) bool {
+	for _, name := range []string{
+		TagEnergy, TagValence, TagIntensity, TagAcousticness, TagDensity,
+	} {
+		if !validAxis(tags[name]) {
+			return false
 		}
 	}
-	sort.Strings(names)
-	return names
+	return inClosedSet(tags[TagTempo], mood.TempoFeels) &&
+		inClosedSet(tags[TagVocal], mood.VocalKinds) &&
+		len(nonEmpty(tags[TagMood])) > 0
+}
+
+// validAxis accepts the integer 0-100 this plugin writes and nothing else. A
+// value outside that range means the writer and the reader disagree about
+// something, and the connector rejects it too rather than clamping.
+func validAxis(values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(values[0]))
+	return err == nil && n >= 0 && n <= 100
+}
+
+// inClosedSet matches a single-valued tag against one of the closed sets,
+// case-insensitively: Navidrome lower-cases field names but not values, and
+// another tool may well have written "Sung".
+func inClosedSet[T ~string](values []string, allowed []T) bool {
+	if len(values) == 0 {
+		return false
+	}
+	got := strings.ToLower(strings.TrimSpace(values[0]))
+	for _, a := range allowed {
+		if string(a) == got {
+			return true
+		}
+	}
+	return false
+}
+
+// nonEmpty drops blank values. A tag present with an empty value carries no
+// information, and the FLAC layer is happy to represent one.
+func nonEmpty(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

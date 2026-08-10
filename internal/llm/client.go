@@ -103,9 +103,10 @@ type Label struct {
 	Density      int    `json:"density"`
 	Tempo        string `json:"tempo"`
 	Vocal        string `json:"vocal"`
-	// Moods are free-form descriptors. They are stored verbatim in kvstore and
-	// only mapped onto the controlled vocabulary on the way into the tag, so the
-	// enum can be revised later without re-paying for inference.
+	// Moods are free-form descriptors, mapped onto the controlled vocabulary on
+	// the way into the tag. Anything that folds onto none of the 52 anchored
+	// terms is dropped: an unanchored word sits at no coordinates, falls in no
+	// vibe region, and nothing downstream can reason about where it is.
 	Moods []string `json:"moods"`
 	Times []string `json:"times,omitempty"`
 }

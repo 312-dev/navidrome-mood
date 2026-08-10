@@ -16,17 +16,35 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/312-dev/navidrome-mood/flac"
 	"github.com/312-dev/navidrome-mood/internal/llm"
+	"github.com/312-dev/navidrome-mood/internal/runner"
 )
 
-// Track is one enumerated file: the metadata to label it with, plus where it is.
+// Track is one enumerated file: the metadata to label it with, where it is, and
+// what it already carries.
 type Track struct {
-	Path     string
-	Meta     llm.Track
-	HasMood  bool
-	Existing []string
+	Path string
+	Meta llm.Track
+	// Tags holds the plugin's own ten tag names as this file currently carries
+	// them, omitting the ones it does not. They come out of the same comment
+	// block the metadata above is parsed from, so reading them costs nothing
+	// beyond the open that had to happen anyway - which is what lets the files be
+	// the record of what has already been labelled.
+	Tags map[string][]string
+}
+
+// File is one taggable path and when it was last modified.
+//
+// The modification time is what auto-sync works from. Navidrome exposes no
+// scan-completed hook, so the only way to find music that arrived since the last
+// check is to compare mtimes against a watermark, and stat is cheap where
+// opening every file to read its tags is not.
+type File struct {
+	Path    string
+	ModTime time.Time
 }
 
 // Unsupported records a file that cannot be tagged, so the counts reconcile.
@@ -64,13 +82,20 @@ var audioExts = map[string]bool{
 //
 // This split exists because of Navidrome's 30-second per-invocation ceiling.
 // Reading metadata from ~9,200 files takes well over a minute, so enumeration
-// cannot read tags: it lists paths (fast, one directory walk), and each task
-// reads metadata only for its own batch. Doing it the obvious way would time out
-// during startup and the plugin would never enqueue anything.
+// cannot read tags: it lists paths and modification times (fast, one directory
+// walk), and each task reads metadata only for its own batch. Doing it the
+// obvious way would time out during startup and the plugin would never enqueue
+// anything.
+//
+// A file whose directory entry cannot be stat'ed is still listed, with a zero
+// ModTime. It is almost always one that was removed between the readdir and the
+// stat, and listing it means a whole-library pass still reports it rather than
+// dropping it silently; auto-sync leaves it alone, since a zero time is older
+// than any watermark.
 //
 // Unsupported audio is still reported here, since that only needs the extension.
-func ListFiles(fsys fs.FS, root string) ([]string, []Unsupported, error) {
-	var paths []string
+func ListFiles(fsys fs.FS, root string) ([]File, []Unsupported, error) {
+	var files []File
 	var unsupported []Unsupported
 
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -81,7 +106,11 @@ func ListFiles(fsys fs.FS, root string) ([]string, []Unsupported, error) {
 		full := path.Join(root, p)
 		switch {
 		case taggable[ext]:
-			paths = append(paths, full)
+			f := File{Path: full}
+			if info, ierr := d.Info(); ierr == nil {
+				f.ModTime = info.ModTime()
+			}
+			files = append(files, f)
 		case audioExts[ext]:
 			unsupported = append(unsupported, Unsupported{
 				Path:   full,
@@ -93,9 +122,19 @@ func ListFiles(fsys fs.FS, root string) ([]string, []Unsupported, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	sort.Strings(paths)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	sort.Slice(unsupported, func(i, j int) bool { return unsupported[i].Path < unsupported[j].Path })
-	return paths, unsupported, nil
+	return files, unsupported, nil
+}
+
+// Paths pulls the paths out of a listing, for the callers that only enqueue
+// work and never look at a modification time.
+func Paths(files []File) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.Path
+	}
+	return out
 }
 
 // ReadTracks reads metadata for specific paths, which is what a task does for its
@@ -197,8 +236,19 @@ func readTrack(fsys fs.FS, p, full string) (*Track, error) {
 	t.Meta.Genres = c.Get("GENRE")
 	t.Meta.Year = parseYear(first(c, "DATE"), first(c, "YEAR"))
 
-	t.Existing = c.Get("MOOD")
-	t.HasMood = len(t.Existing) > 0
+	// The plugin's own ten, read from the block already in hand. runner.TagNames
+	// is the single list of them, shared with the writer so that a rename cannot
+	// leave the reader looking for a name nothing writes. Comments.Get matches
+	// case-insensitively, so the lower-case contract names find the upper-case
+	// fields every tagger actually writes.
+	for _, name := range runner.TagNames {
+		if v := c.Get(name); len(v) > 0 {
+			if t.Tags == nil {
+				t.Tags = make(map[string][]string, len(runner.TagNames))
+			}
+			t.Tags[name] = v
+		}
+	}
 
 	if t.Meta.Title == "" {
 		t.Meta.Title = strings.TrimSuffix(path.Base(full), path.Ext(full))
@@ -225,24 +275,6 @@ func parseYear(values ...string) int {
 		}
 	}
 	return 0
-}
-
-// Pending returns the tracks still needing a label.
-//
-// skipTagged consults the tag in the FILE, not just this plugin's own records,
-// so a library already tagged by Picard or beets is left alone. The plugin adds
-// MOOD; it does not own it.
-func (r *Result) Pending(skipTagged bool) []Track {
-	if !skipTagged {
-		return r.Tracks
-	}
-	out := make([]Track, 0, len(r.Tracks))
-	for _, t := range r.Tracks {
-		if !t.HasMood {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // Batch splits tracks into groups of n.

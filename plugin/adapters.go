@@ -17,12 +17,6 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/llm"
 )
 
-// kvStore adapts the kvstore host service to runner.Store.
-type kvStore struct{}
-
-func (kvStore) Get(key string) ([]byte, bool, error) { return host.KVStoreGet(key) }
-func (kvStore) Set(key string, value []byte) error   { return host.KVStoreSet(key, value) }
-
 // httpDoer adapts the http host service to llm.Doer.
 type httpDoer struct{}
 

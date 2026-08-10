@@ -21,18 +21,26 @@ repeating.
 
 ## What is not done
 
-0.2.0 is registered and its package hash matches the local build, but it is
-disabled pending approval of its new permission set, so nothing is running. See
-step 2.
+0.2.0 is registered and disabled, pending approval of its permission set, so
+nothing is running. The local build is 0.3.0, so the package on the Mini is a
+version behind as well as disabled. See step 2.
 
 `dryRun` is still on and the run counter still reads $24.98 of a $25 limit, so
 even once enabled it will write nothing and every batch will fail on the cap
 until step 4.
 
-The labels that $24.98 bought cannot be reused. They carry four axes against the
-old 60-word vocabulary, and `density`, `tempo` and `vocal` were never judged, so
-those tracks need another pass whatever happens. `RecordSchema = 2` forces
-exactly that.
+The $24.98 bought nothing that survives. Preview mode was on, so no tag reached
+a file, and the tags in the files are the only record this plugin keeps. Those
+tracks carry no mood tags and are ordinary candidates for the next pass.
+
+What that run did leave behind is about 4,200 per-track entries in the plugin's
+key-value store, roughly 1.6 MB. Nothing reads them any more. 0.3.0 deletes them
+as it goes, 500 per load and 500 per auto-sync tick, and logs how many remain.
+
+It asks for 8 MB of storage purely so that clearing them has room to happen: a
+store over its allowance refuses every write, including the spend counter, and a
+spend counter that cannot be written halts the plugin. The plugin's own needs
+are a few hundred bytes.
 
 ## Deploy
 
@@ -53,8 +61,9 @@ is the right behaviour and it is silent: a disabled plugin never loads, so it
 logs nothing at all, which reads like a failed install rather than a consent
 prompt.
 
-Going from 0.1.0 to 0.2.0 drops `subsonicapi` and `users`, so it happens on this
-upgrade. Enable it in Navidrome's plugin settings and confirm both flags:
+Going from 0.2.0 to 0.3.0 drops the `kvstore` permission's 64 MB request, which
+is a change to the permission set, so it happens on this upgrade too. Enable it
+in Navidrome's plugin settings and confirm both flags:
 
 ```sh
 docker exec navidrome sqlite3 -readonly /data/navidrome.db \
@@ -73,6 +82,11 @@ ssh macmini 'export PATH=/usr/local/bin:$PATH; docker restart navidrome && sleep
 The line to look for is the readiness log. It must say **52 mood terms, 146
 synonyms**. If it still says 60 terms and 28 synonyms, the old `.ndp` is still
 being loaded and nothing below is worth doing.
+
+The next line should say it reclaimed 500 per-track storage entries and name how
+many remain. That number falls by 500 on each load and each auto-sync tick and
+reaches zero within a couple of hours. It does not block anything: the 8 MB
+allowance leaves room for the store to work while it drains.
 
 ### 4. Turn off preview mode and reset the spend counter
 
@@ -113,11 +127,12 @@ files up yet: `ND_SCANSCHEDULE` is `1m`, so give it a minute.
 
 ### 6. Only then, the full pass
 
-Set **Label my library** to `everything` and raise the run limit. Budget roughly
-$15 for about 9,000 tracks on the default model, from the one measured data
-point of $27.22 for 9,311 tracks on Opus and Sonnet priced at 0.6x on both input
-and output. Treat it as an estimate: the ten-field record is larger than the
-six-field one that number came from, so the real figure is likely higher.
+Set **Label my library** to `everything` and raise the run limit. Budget $30 to
+$55 for about 9,000 tracks. The two measured runs disagree: 9,311 tracks on Opus
+cost $27.22, while a later partial run reached 4,239 tracks for $24.98, which is
+$0.0059 each and implies about $54. Take the higher one, and trust the
+pre-flight estimate printed at the start of the run over either, since it prices
+your actual model against your actual track count.
 
 The lifetime cap is the real backstop. It never resets, and unlike the run limit
 it is what stops repeated runs adding up to a number you did not intend.
@@ -131,6 +146,12 @@ it is what stops repeated runs adding up to a number you did not intend.
 - **Tags in the files but nothing in Navidrome**: the `Tags` block in
   `/data/navidrome.toml` was lost. An undeclared tag is discarded silently by
   the scanner. Re-check with the 0-versus-9,310 test above.
-- **A warning about stale records on every load**: expected until a
-  `run: everything` pass completes. Records from before the ten-tag write cannot
-  be migrated because the missing fields were never judged.
+- **Every write fails with `storage limit exceeded`**: the per-track entries
+  described above have not finished clearing. Reload the plugin, or wait for the
+  next auto-sync tick, and watch the reclaimed count fall.
+- **A warning on load about tracks carrying a mood tag and nothing else**: those
+  are tracks something wrote a `mood` on without the five axes, tempo or vocal,
+  which is everything a smart playlist filters on. Nothing can tell whether this
+  plugin or Picard wrote them, so they are left alone. Turning off **Leave
+  existing mood tags alone** sends them through labelling and replaces whatever
+  wrote them.

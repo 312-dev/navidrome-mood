@@ -4,6 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/312-dev/navidrome-mood/flac"
+	"github.com/312-dev/navidrome-mood/internal/runner"
 )
 
 func scanTestdata(t *testing.T) *Result {
@@ -136,23 +140,85 @@ func TestUnparseableFLACIsRecordedAsFailed(t *testing.T) {
 	}
 }
 
-func TestPendingRespectsExistingTags(t *testing.T) {
-	res := scanTestdata(t)
-	all := res.Pending(false)
-	if len(all) != len(res.Tracks) {
-		t.Fatalf("skipTagged=false returned %d of %d", len(all), len(res.Tracks))
+// Whether a track has already been labelled is answered from its own tags, so
+// those tags have to come back out of the same pass that reads the title and the
+// artist. Reading them separately would mean opening every file twice.
+func TestReadTracksReportsTheMoodTagsInTheFile(t *testing.T) {
+	dir := t.TempDir()
+	labelled := writeFixture(t, dir, "labelled.flac", map[string][]string{
+		runner.TagEnergy:       {"70"},
+		runner.TagValence:      {"40"},
+		runner.TagIntensity:    {"60"},
+		runner.TagAcousticness: {"30"},
+		runner.TagDensity:      {"55"},
+		runner.TagTempo:        {"mid"},
+		runner.TagVocal:        {"sung"},
+		runner.TagMood:         {"melancholy", "warm"},
+	})
+	bare := writeFixture(t, dir, "bare.flac", nil)
+
+	tracks, failed := ReadTracks(os.DirFS(dir), "/m", []string{labelled, bare})
+	if len(failed) != 0 {
+		t.Fatalf("failed: %v", failed)
+	}
+	byPath := map[string]Track{}
+	for _, tr := range tracks {
+		byPath[tr.Path] = tr
 	}
 
-	// None of the fixtures carry MOOD, so skipping changes nothing yet.
-	if got := len(res.Pending(true)); got != len(res.Tracks) {
-		t.Fatalf("pending = %d, want %d (no fixture has MOOD)", got, len(res.Tracks))
+	got := byPath[labelled]
+	if !runner.FullyLabelled(got.Tags) {
+		t.Fatalf("a file carrying the full set does not read as labelled: %v", got.Tags)
+	}
+	// Multi-valued tags must survive whole; keeping only the first would make a
+	// two-word mood look like a one-word one.
+	if v := got.Tags[runner.TagMood]; len(v) != 2 {
+		t.Fatalf("%s = %v, want both values", runner.TagMood, v)
+	}
+	// Only the plugin's own names, so nothing else in the file is carried around.
+	for name := range got.Tags {
+		if !contains(runner.TagNames, name) {
+			t.Errorf("read %q, which is not one of the plugin's tags", name)
+		}
 	}
 
-	// Mark one as tagged and confirm it drops out.
-	res.Tracks[0].HasMood = true
-	if got := len(res.Pending(true)); got != len(res.Tracks)-1 {
-		t.Fatalf("pending = %d, want %d", got, len(res.Tracks)-1)
+	if runner.FullyLabelled(byPath[bare].Tags) {
+		t.Fatalf("a file with no mood tags reads as labelled: %v", byPath[bare].Tags)
 	}
+}
+
+// writeFixture copies the test FLAC into dir under name, sets the given tags on
+// it, and returns the path as ReadTracks will see it.
+func writeFixture(t *testing.T, dir, name string, tags map[string][]string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/test.flac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := filepath.Join(dir, name)
+	if err := os.WriteFile(full, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) > 0 {
+		if _, err := flac.UpdateTags(full, func(c *flac.Comments) error {
+			for k, v := range tags {
+				c.Set(k, v...)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return "/m/" + name
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBatch(t *testing.T) {
@@ -246,18 +312,58 @@ func TestListFilesFindsPathsWithoutParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths, unsupported, err := ListFiles(os.DirFS(dir), "/m")
+	files, unsupported, err := ListFiles(os.DirFS(dir), "/m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 2 {
-		t.Fatalf("paths = %v, want both flacs including the broken one", paths)
+	if len(files) != 2 {
+		t.Fatalf("files = %v, want both flacs including the broken one", files)
 	}
+	paths := Paths(files)
 	if paths[0] != "/m/broken.flac" || paths[1] != "/m/good.flac" {
 		t.Fatalf("paths not sorted or not rooted: %v", paths)
 	}
 	if len(unsupported) != 1 {
 		t.Fatalf("unsupported = %v, want the mp3", unsupported)
+	}
+	// Auto-sync decides what to open from these, so a listing without them makes
+	// every file look untouched since the beginning of time.
+	for _, f := range files {
+		if f.ModTime.IsZero() {
+			t.Errorf("%s was listed with no modification time", f.Path)
+		}
+	}
+}
+
+// The mtime is the signal auto-sync works from, so it has to be the file's own
+// and not the time of the walk.
+func TestListFilesReportsEachFilesOwnModTime(t *testing.T) {
+	dir := t.TempDir()
+	raw, _ := os.ReadFile("../../testdata/test.flac")
+	for _, name := range []string{"old.flac", "new.flac"} {
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Date(2020, 3, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(dir, "old.flac"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	files, _, err := ListFiles(os.DirFS(dir), "/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]File{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	if got := byPath["/m/old.flac"].ModTime.UTC(); !got.Equal(old) {
+		t.Fatalf("old.flac mtime = %v, want %v", got, old)
+	}
+	if !byPath["/m/new.flac"].ModTime.After(old) {
+		t.Fatalf("new.flac mtime = %v, want something after %v",
+			byPath["/m/new.flac"].ModTime, old)
 	}
 }
 

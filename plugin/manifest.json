@@ -1,7 +1,7 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://navidrome-mood.312.dev",
   "permissions": {
@@ -13,8 +13,8 @@
       "filesystem": true
     },
     "kvstore": {
-      "reason": "Remember each track's mood judgement, spend so far, and where to resume after a restart. Without it every restart would re-pay for inference already bought. Measured at about 390 bytes per track, so the 1MB default holds roughly 2,600 tracks and silently stops a library larger than that from being labelled; 64MB covers about 170,000.",
-      "maxSize": "64MB"
+      "reason": "Remember spend so far, how much work is queued, and where the last check for new music got to. That is a few hundred bytes whatever the library's size: what has been labelled is recorded in the files themselves. The 8MB is headroom for an older version's per-track entries, which this one deletes as it finds them; a library of 9,000 left about 1.6MB of them, and a store over its allowance refuses every write including the spend counter.",
+      "maxSize": "8MB"
     },
     "scheduler": {
       "reason": "Run the periodic check for newly added music, on the interval you set. Navidrome exposes no scan-completed hook, so polling is the only way to label new tracks without you starting a run by hand."
@@ -61,7 +61,7 @@
         "run": {
           "type": "string",
           "title": "Label my library",
-          "description": "Start with 'sample': it labels 20 tracks from across your library for a few cents so you can see whether you like the results. 'everything' labels every track that has no mood yet. Work is queued and survives restarts, and setting this back to 'off' does not cancel work already queued.",
+          "description": "Start with 'sample': it labels 20 tracks from across your library for a few cents so you can see whether you like the results. 'everything' labels every track that is not already carrying a full set of mood tags. Work is queued and survives restarts, and setting this back to 'off' does not cancel work already queued.",
           "enum": [
             "off",
             "sample",
@@ -72,13 +72,13 @@
         "dryRun": {
           "type": "boolean",
           "title": "Preview only, do not change my files",
-          "description": "Labels are generated and saved, but nothing is written to your music files. Note this still costs the same to run, because the labels are still produced - it only protects the files, not your bill.",
+          "description": "Nothing is written to your music files. This costs the same as a real run, because the labels are still produced, and it leaves nothing behind: the tags in the files are the only record this plugin keeps, so a preview buys you a count and a cost figure rather than labels.",
           "default": false
         },
         "skipTagged": {
           "type": "boolean",
           "title": "Leave existing mood tags alone",
-          "description": "Skips any track that already has a mood, including ones written by Picard, beets or by hand. Turn off only if you want everything relabelled.",
+          "description": "Skips any track that already has a mood, including ones written by Picard, beets or by hand. Turn it off to send those through labelling, which also replaces whatever wrote them. Tracks already carrying the full set of ten tags are skipped either way, because redoing them would cost money and change nothing.",
           "default": true
         },
         "autoSync": {

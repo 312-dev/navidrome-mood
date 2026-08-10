@@ -23,8 +23,8 @@ const (
 
 	// Every 15 minutes, which is as close to "on ingest" as a plugin can get:
 	// Navidrome exposes no scan-completed hook, so polling is the only mechanism.
-	// Affordable because syncNew costs one directory walk and one KVStoreList
-	// when nothing has changed - it opens no files unless something is new.
+	// Affordable because syncNew costs one directory walk when nothing has
+	// changed - it opens no file whose mtime is older than the last check.
 	defaultSyncCron = "*/15 * * * *"
 )
 
@@ -41,9 +41,12 @@ func (p *plugin) OnInit() error {
 	logf(pdk.LogInfo, "navidrome-mood ready: %d mood terms, %d synonyms",
 		len(mood.Vocabulary), len(mood.Synonyms))
 
-	// Before anything else runs, because a library carried over from an older
-	// version looks completely labelled and is not.
-	warnAboutStaleRecords()
+	// Before anything writes, because everything below competes for the same 1MB
+	// allowance as the entries this gives back.
+	reclaimPerTrackKeys()
+
+	// A library full of mood words and nothing else looks labelled and is not.
+	warnAboutPartialLabels()
 
 	// The self-test is diagnostic and opt-in, run here rather than on a queue so
 	// its output lands next to the load line where anyone debugging will look.

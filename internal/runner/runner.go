@@ -1,13 +1,17 @@
 // Package runner orchestrates one batch of labelling: budget check, provider
-// call, vocabulary mapping, tag write, and durable state.
+// call, vocabulary mapping and tag write.
 //
-// Everything here is behind interfaces so it runs as an ordinary Go test. The
-// wasm build wires Store to kvstore and Tagger to the flac package; tests wire
-// both to fakes.
+// Nothing per-track is remembered anywhere but the files themselves. Every value
+// a verdict produces is written into the FLAC as a tag, so the file answers the
+// only question a later pass has to ask - "has this track been judged already" -
+// and there is no parallel store to keep in step with it or to run out of room.
+//
+// The provider and the tagger are behind interfaces so this runs as an ordinary
+// Go test. The wasm build wires Tagger to the flac package; tests wire it to a
+// fake.
 package runner
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -15,68 +19,28 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
-// Store is the kvstore seam. State must be durable because a whole-library pass
-// spans many invocations and can be interrupted by a restart at any point.
-type Store interface {
-	Get(key string) ([]byte, bool, error)
-	Set(key string, value []byte) error
-}
-
 // Tagger is the file-writing seam. It is generic over tag names because nine of
 // the ten tags carry the geometry the connector actually reads; a mood-only seam
 // could only ever write the tenth.
 type Tagger interface {
-	// ReadTags returns the values present for the named tags, omitting names the
-	// file does not carry. Used to spot tracks tagged by Picard or beets so they
-	// can be left alone.
-	ReadTags(path string, names ...string) (map[string][]string, error)
 	// WriteTags replaces each named tag with the given values and reports what
 	// strategy the write used. A name mapped to no values removes that tag; a name
-	// absent from the map is left untouched. Record.Tags always names all ten, so
-	// a relabel replaces the plugin's whole set rather than merging into it.
+	// absent from the map is left untouched. A write always names all ten, so a
+	// relabel replaces the plugin's whole set rather than merging into it.
 	WriteTags(path string, tags map[string][]string) (string, error)
 }
 
-// Item is one track to label, paired with the file to tag.
+// Item is one track to label, paired with the file to tag and whatever that file
+// already carries under the plugin's ten names.
+//
+// Tags comes from the same comment block the metadata in Track was parsed out
+// of, so deciding what to skip costs nothing beyond the read the caller had to
+// do anyway. A nil map means a file carrying none of the ten, which is a track
+// nothing has ever labelled.
 type Item struct {
 	Track llm.Track
 	Path  string
-}
-
-// RecordSchema is the version stamped into every Record written, and the version
-// alreadyDone will trust a `tagged: true` from.
-//
-// It exists because a record is what makes skipTagged skip. Records written
-// before the ten-tag write carry the mood words and nothing else, yet they
-// deserialise cleanly into the struct below with the four new axes reading 0 and
-// tempo and vocal reading "" - a track that is nine tenths unlabelled, reporting
-// itself done. Bumping this is what sends those tracks back through labelling
-// instead. There is no in-place migration because the missing fields were never
-// judged; only another pass can supply them.
-const RecordSchema = 2
-
-// Record is what is remembered per track. The free-form descriptors are kept
-// verbatim alongside the canonical ones, so the controlled vocabulary can be
-// revised later without re-paying for inference.
-type Record struct {
-	Schema       int      `json:"schema"`
-	ID           string   `json:"id"`
-	Energy       int      `json:"energy"`
-	Valence      int      `json:"valence"`
-	Intensity    int      `json:"intensity"`
-	Acousticness int      `json:"acousticness"`
-	Density      int      `json:"density"`
-	Tempo        string   `json:"tempo"`
-	Vocal        string   `json:"vocal"`
-	Freeform     []string `json:"freeform"`
-	Canonical    []string `json:"canonical"`
-	Times        []string `json:"times,omitempty"`
-	// Vibes are the regions the axes above fall in. Stored alongside the axes so
-	// a change to the region geometry can be replayed from records rather than
-	// re-bought from the model.
-	Vibes       []string `json:"vibes,omitempty"`
-	Tagged      bool     `json:"tagged"`
-	TagsWritten []string `json:"tagsWritten,omitempty"`
+	Tags  map[string][]string
 }
 
 // Options configure one run.
@@ -94,13 +58,18 @@ type Outcome struct {
 	Written   int
 	// Unresolved are tracks that were sent but came back without a usable label,
 	// either because the reply omitted them or because what it said about them
-	// failed validation. They are deliberately NOT marked done, so a later pass
-	// retries them.
+	// failed validation. Nothing is written for them, which is what leaves them
+	// looking unlabelled to a later pass so it retries them.
 	Unresolved []string
 	// Rejected explains, per track ID, why a label that did arrive was thrown
 	// away. Those IDs also appear in Unresolved; this is what lets a caller say
 	// which of the two happened instead of reporting a silent gap.
 	Rejected map[string]string
+	// MoodOnly counts tracks skipped because they carry a mood tag and none of
+	// the seven values a smart playlist filters on. Counted separately from the
+	// rest of Skipped because it is the one kind of skip the user can change
+	// their mind about, by turning skipTagged off.
+	MoodOnly int
 	Usage    llm.Usage
 	Cost     float64
 }
@@ -108,7 +77,6 @@ type Outcome struct {
 type Runner struct {
 	Provider llm.Provider
 	Budget   *llm.Budget
-	Store    Store
 	Tagger   Tagger
 	System   string
 	Opts     Options
@@ -116,12 +84,6 @@ type Runner struct {
 	// model costs different amounts through the batch endpoint.
 	Discounted bool
 }
-
-// RecordPrefix is the kvstore key prefix for per-track records. Exported so the
-// incremental sync can list known tracks in one call instead of probing per file.
-const RecordPrefix = "track:"
-
-func recordKey(id string) string { return RecordPrefix + id }
 
 // Process labels one batch and writes tags.
 //
@@ -136,15 +98,27 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 
 	pending := make([]Item, 0, len(items))
 	for _, it := range items {
-		skip, err := r.alreadyDone(it)
-		if err != nil {
-			return out, err
-		}
-		if skip {
+		switch {
+		case FullyLabelled(it.Tags):
+			// Already done, and re-paying for finished work is the expensive
+			// mistake this whole check exists to prevent. Skipped whatever
+			// skipTagged says, because that setting is about tags this plugin did
+			// not write and these are unmistakably its own.
 			out.Skipped++
-			continue
+		case len(nonEmpty(it.Tags[TagMood])) > 0:
+			// A mood tag and nothing else. It is either an older version of this
+			// plugin or another tool entirely, and no amount of reading can tell
+			// which, so the user's answer to "leave existing mood tags alone" is
+			// the only thing that can decide it.
+			if r.Opts.SkipTagged {
+				out.Skipped++
+				out.MoodOnly++
+				continue
+			}
+			pending = append(pending, it)
+		default:
+			pending = append(pending, it)
 		}
-		pending = append(pending, it)
 	}
 	if len(pending) == 0 {
 		return out, nil
@@ -193,9 +167,9 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 	for _, it := range pending {
 		label, ok := byID[it.Track.ID]
 		if !ok {
-			// The model skipped it, or the response was truncated. Leaving it
-			// unrecorded is the whole point: marking it done would mean it is
-			// never labelled and the gap is invisible.
+			// The model skipped it, or the response was truncated. Writing nothing
+			// is the whole point: a partial write would leave the file looking
+			// labelled, and the gap would be invisible from then on.
 			out.Unresolved = append(out.Unresolved, it.Track.ID)
 			continue
 		}
@@ -212,35 +186,16 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 		}
 		out.Labelled++
 
-		rec := Record{
-			Schema:       RecordSchema,
-			ID:           label.ID,
-			Energy:       label.Energy,
-			Valence:      label.Valence,
-			Intensity:    label.Intensity,
-			Acousticness: label.Acousticness,
-			Density:      label.Density,
-			Tempo:        label.Tempo,
-			Vocal:        label.Vocal,
-			Freeform:     label.Moods,
-			Canonical:    mood.TagValues(label.Moods, MoodTermCap),
-			Times:        llm.KnownTimes(label.Times),
-			Vibes:        vibesFor(label),
+		if r.Opts.DryRun || it.Path == "" {
+			// A preview keeps nothing. The tags in the files are the only record
+			// this plugin has, so a run that writes none of them buys a count and a
+			// cost figure and leaves the library exactly as it found it.
+			continue
 		}
-
-		if !r.Opts.DryRun && it.Path != "" {
-			tags := rec.Tags()
-			if _, err := r.Tagger.WriteTags(it.Path, tags); err != nil {
-				return out, fmt.Errorf("writing %s: %w", it.Path, err)
-			}
-			rec.Tagged = true
-			rec.TagsWritten = writtenNames(tags)
-			out.Written++
+		if _, err := r.Tagger.WriteTags(it.Path, tagsFor(label)); err != nil {
+			return out, fmt.Errorf("writing %s: %w", it.Path, err)
 		}
-
-		if err := r.save(rec); err != nil {
-			return out, err
-		}
+		out.Written++
 	}
 	return out, nil
 }
@@ -267,55 +222,13 @@ func vibesFor(label llm.Label) []string {
 	return out
 }
 
-// alreadyDone reports whether a track can be skipped.
-func (r *Runner) alreadyDone(it Item) (bool, error) {
-	if !r.Opts.SkipTagged {
-		return false, nil
-	}
-	// A prior run of this plugin.
-	if raw, ok, err := r.Store.Get(recordKey(it.Track.ID)); err != nil {
-		return false, err
-	} else if ok {
-		var rec Record
-		if err := json.Unmarshal(raw, &rec); err == nil && rec.Tagged {
-			if rec.Schema >= RecordSchema {
-				return true, nil
-			}
-			// An older record means this plugin wrote the mood tag itself and
-			// nothing else. Relabel, and return here rather than falling through:
-			// the check below would otherwise read that same mood tag, take it for
-			// another tool's work, and skip the track forever.
-			return false, nil
-		}
-	}
-	// A tag written by something else entirely - Picard, beets, a manual edit.
-	// The plugin adds mood tags, it does not own the file.
-	if it.Path != "" && r.Tagger != nil {
-		existing, err := r.Tagger.ReadTags(it.Path, TagMood)
-		if err != nil {
-			return false, err
-		}
-		if len(existing[TagMood]) > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (r *Runner) save(rec Record) error {
-	raw, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
-	return r.Store.Set(recordKey(rec.ID), raw)
-}
-
 // project estimates a batch's cost for the pre-flight cap check.
 func (r *Runner) project(n int) (float64, error) {
 	// Assume no cache hit, which overestimates the input side and therefore fails
 	// safe there. The output side runs the other way: OutputTokensPerTrack was
-	// measured on a smaller record and now reads low. The cap itself still holds,
-	// since Budget charges from the usage each reply reports.
+	// measured against a reply carrying fewer fields than one now carries, so it
+	// reads low. The cap itself still holds, since Budget charges from the usage
+	// each reply reports.
 	u := llm.Usage{
 		Input:  int64(len(r.System)/3) + int64(n)*80,
 		Output: int64(n) * llm.OutputTokensPerTrack,
