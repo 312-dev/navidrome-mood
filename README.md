@@ -25,8 +25,8 @@ the labels stay in your music.
   local Ollama or LM Studio.
 - **Navidrome needs plugin support turned on** and the mount for your library
   visible to plugins. `navidrome plugin list` tells you whether that is the case.
-- **Budget about $15** for 9,000 tracks on the default model. See
-  [What it costs](#what-it-costs).
+- **Budget $30 to $55** for 9,000 tracks on the default model, and read
+  [What it costs](#what-it-costs) before starting. The two measured runs disagree.
 
 ## Install
 
@@ -192,10 +192,20 @@ than written.
 
 The default provider is Anthropic and the default model is `claude-sonnet-5`.
 
-The one measured figure: a 9,311-track pass on `claude-opus-5` cost **$27.22**,
-against a pre-flight projection of $27.30. Sonnet is priced at 0.6x Opus on both
-input and output, so **roughly $15 for a 9,000-track library** on the default
-model. That figure is derived from the Opus run rather than measured directly.
+Two measured figures, and they disagree enough to be worth stating separately.
+
+A 9,311-track pass on `claude-opus-5` cost **$27.22** against a pre-flight
+projection of $27.30. A later partial run reached 4,239 tracks for **$24.98**,
+which is $0.0059 each and puts a 9,000-track library nearer **$54**.
+
+Take the higher one. The second run is the more recent measurement, and the
+prompt has grown since both: it now carries all 52 anchors with their coordinates
+and glosses, which is a larger constant on every request. That constant is
+identical across batches and therefore cacheable, so the per-track cost should
+fall on a long run, but no measurement of that exists yet.
+
+The pre-flight estimate printed before each run is the number to trust over any
+figure here, because it prices your actual model against your actual track count.
 
 Two limits, both hard stops rather than estimates:
 
