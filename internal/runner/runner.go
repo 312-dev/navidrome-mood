@@ -14,6 +14,8 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/312-dev/navidrome-mood/internal/llm"
 	"github.com/312-dev/navidrome-mood/internal/mood"
@@ -136,9 +138,28 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 		}
 	}
 
+	// The model is given a short opaque handle per track rather than the track's
+	// real id, which is its path.
+	//
+	// Matching a reply means finding the id the model echoed back, so whatever is
+	// sent has to survive a round trip through the model byte for byte. A path
+	// does not reliably do that. Measured on a real library on 2026-08-10, about
+	// one track in ten came back unmatched and every example carried non-ASCII
+	// characters: "JAY-Z" with a diaeresis, "Ufuk Caliskan - Unutmak Istiyorum",
+	// "RUFUS", "Version". macOS stores filenames decomposed, so those are
+	// multi-codepoint sequences that normalise easily in transit, and a track that
+	// fails to match is judged, billed, and then billed again on the retry.
+	//
+	// "t1" has nothing to mis-transcribe. It also drops the paths out of the
+	// request, which is the largest per-track field in it.
 	tracks := make([]llm.Track, len(pending))
+	handles := make(map[string]int, len(pending))
 	for i, it := range pending {
-		tracks[i] = it.Track
+		h := "t" + strconv.Itoa(i+1)
+		handles[h] = i
+		t := it.Track
+		t.ID = h
+		tracks[i] = t
 	}
 
 	res, labelErr := r.Provider.Label(r.System, tracks)
@@ -159,13 +180,17 @@ func (r *Runner) Process(items []Item) (*Outcome, error) {
 		return out, labelErr
 	}
 
-	byID := make(map[string]llm.Label, len(res.Labels))
+	// Back to positions. Everything reported from here on names the real track,
+	// because "t7 came back unlabelled" tells nobody which file to look at.
+	byIndex := make(map[int]llm.Label, len(res.Labels))
 	for _, l := range res.Labels {
-		byID[l.ID] = l
+		if i, ok := handles[strings.TrimSpace(l.ID)]; ok {
+			byIndex[i] = l
+		}
 	}
 
-	for _, it := range pending {
-		label, ok := byID[it.Track.ID]
+	for i, it := range pending {
+		label, ok := byIndex[i]
 		if !ok {
 			// The model skipped it, or the response was truncated. Writing nothing
 			// is the whole point: a partial write would leave the file looking

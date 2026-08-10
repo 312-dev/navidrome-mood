@@ -54,7 +54,11 @@ type stubProvider struct {
 	err    error
 	called int
 	gotN   int
+	gotIDs []string
 	model  string
+	// mangleIDs makes the stub answer with ids that are not the ones it was
+	// given, which is what a model does to a path full of decomposed diacritics.
+	mangleIDs bool
 }
 
 func (s *stubProvider) Name() string { return "stub" }
@@ -70,7 +74,21 @@ func (s *stubProvider) SupportsBatch() bool { return false }
 func (s *stubProvider) Label(_ string, tracks []llm.Track) (*llm.Result, error) {
 	s.called++
 	s.gotN = len(tracks)
-	return &llm.Result{Labels: s.labels, Usage: s.usage}, s.err
+	s.gotIDs = nil
+	for _, t := range tracks {
+		s.gotIDs = append(s.gotIDs, t.ID)
+	}
+	// Echo the handle back, the way a model that followed instructions would.
+	// Tests set labels positionally and never see the handles, so a change to how
+	// they are minted does not have to be repeated in every fixture.
+	labels := make([]llm.Label, len(s.labels))
+	copy(labels, s.labels)
+	for i := range labels {
+		if i < len(tracks) && !s.mangleIDs {
+			labels[i].ID = tracks[i].ID
+		}
+	}
+	return &llm.Result{Labels: labels, Usage: s.usage}, s.err
 }
 
 func item(id, path string) Item {
@@ -789,5 +807,52 @@ func TestDryRunWritesNothingAtAll(t *testing.T) {
 	}
 	if out.Written != 0 || len(tg.written) != 0 {
 		t.Fatalf("dry run wrote to %d files", len(tg.written))
+	}
+}
+
+// A path is never sent to the model, and a reply that does not echo the handle
+// back is unresolved rather than silently mismatched.
+//
+// Measured on a real library on 2026-08-10: roughly one track in ten came back
+// unmatched, and every example carried non-ASCII characters in its filename.
+// Each of those was judged, billed, and billed again on the retry.
+func TestTheModelNeverSeesAPath(t *testing.T) {
+	p := &stubProvider{labels: []llm.Label{label("ignored", "warm")}}
+	r := newRunner(p, newTagger(), Options{})
+
+	path := "/libraries/1/02. Ufuk \u00c7ali\u015fkan - Unutmak \u0130stiyorum.flac"
+	out, err := r.Process([]Item{item(path, path)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range p.gotIDs {
+		if strings.Contains(got, "/") || strings.ContainsAny(got, "\u00c7\u015f\u0130") {
+			t.Fatalf("the model was sent %q; handles must carry nothing to mis-transcribe", got)
+		}
+	}
+	if out.Labelled != 1 {
+		t.Fatalf("Labelled = %d, want 1: an echoed handle must match", out.Labelled)
+	}
+}
+
+func TestAMangledIDIsUnresolvedNotMismatched(t *testing.T) {
+	// What a model does with a path it could not reproduce: it answers with
+	// something plausible that is not the handle it was given.
+	p := &stubProvider{labels: []llm.Label{label("/libraries/1/a.flac", "warm")}, mangleIDs: true}
+	r := newRunner(p, newTagger(), Options{})
+
+	out, err := r.Process([]Item{item("/a.flac", "/a.flac"), item("/b.flac", "/b.flac")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Labelled != 0 || len(out.Unresolved) != 2 {
+		t.Fatalf("Labelled = %d, Unresolved = %v; a reply that matches nothing must resolve nothing",
+			out.Labelled, out.Unresolved)
+	}
+	// Reported by path, because "t1 came back unlabelled" names no file.
+	for _, u := range out.Unresolved {
+		if !strings.HasPrefix(u, "/") {
+			t.Fatalf("Unresolved names %q, want the real path", u)
+		}
 	}
 }
