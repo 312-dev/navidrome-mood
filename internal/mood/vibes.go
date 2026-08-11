@@ -128,3 +128,46 @@ func VibesFor(p Point, max int) []Match {
 	}
 	return out
 }
+
+// FringeFactor widens a radius for a second-choice match. Measured on a 9,195
+// track library: of the 3,230 tracks in no region at all, the median sat 2.2
+// beyond the nearest boundary, against a median distance between any two tracks
+// of 17.7. They are not unusual music between the regions, they are ordinary
+// music just outside an edge. 1.5 takes coverage from 65% to 94%; 2.0 reaches
+// 100%, which is the point at which membership stops carrying information.
+const FringeFactor = 1.5
+
+// NearestFor reports the closest region a point would join if that region's
+// radius were widened by FringeFactor, and whether one was found.
+//
+// The hard constraints still apply. A vocal track does not become a fringe
+// member of `focus` by being close to its centre, because the constraint is
+// what the region means rather than how large it is.
+//
+// This is deliberately separate from VibesFor and written to its own tag. A
+// caller that treats a fringe match as membership has thrown away the only
+// thing that distinguishes "this is a late night track" from "this is the
+// closest thing to one that the library has".
+func NearestFor(p Point) (Match, bool) {
+	best, found := Match{}, false
+	for _, name := range RegionNames {
+		r := Regions[name]
+		if v := r.Valence; v != nil && (p.Valence < v[0] || p.Valence > v[1]) {
+			continue
+		}
+		if r.Tempo != nil && !contains(r.Tempo, p.Tempo) {
+			continue
+		}
+		if r.Vocal != nil && !contains(r.Vocal, p.Vocal) {
+			continue
+		}
+		d := Distance(p.Axes, r.Centre)
+		if d > r.Radius*FringeFactor {
+			continue
+		}
+		if !found || d < best.Distance {
+			best, found = Match{Vibe: name, Distance: math.Round(d*10) / 10}, true
+		}
+	}
+	return best, found
+}

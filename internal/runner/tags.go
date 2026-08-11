@@ -34,6 +34,12 @@ const (
 	TagVocal        = "ndmood_vocal"
 	TagTime         = "ndmood_time"
 	TagVibe         = "vibe"
+	// TagVibeNear carries the nearest region a track just missed, and is written
+	// only when TagVibe is empty. Kept separate rather than folded into `vibe`
+	// so that a reader can still tell a member from a near miss; merging them
+	// would raise coverage by discarding the distinction that makes coverage
+	// worth having.
+	TagVibeNear = "vibe_near"
 )
 
 // LegacyTagNames maps the names these tags were written under before 0.5.0 to
@@ -77,11 +83,11 @@ func ReadableTagNames() []string {
 	return out
 }
 
-// TagNames lists all ten, for callers that need to name the whole set rather
+// TagNames lists all eleven, for callers that need to name the whole set rather
 // than one tag: the write, and the read that decides what is already labelled.
 var TagNames = []string{
 	TagMood, TagEnergy, TagValence, TagIntensity, TagAcousticness,
-	TagDensity, TagTempo, TagVocal, TagTime, TagVibe,
+	TagDensity, TagTempo, TagVocal, TagTime, TagVibe, TagVibeNear,
 }
 
 // MoodTermCap is how many vocabulary terms reach the `mood` tag. Two to four is
@@ -96,21 +102,26 @@ const MoodTermCap = 4
 // nearest three are the ones a playlist would actually reach for.
 const MaxVibes = 3
 
-// tagsFor renders a verdict as the write to perform, naming all ten every time.
+// tagsFor renders a verdict as the write to perform, naming all eleven every time.
 //
-// Naming all ten is what makes a relabel a REPLACE rather than a merge. A track
-// that used to land in `melancholy` and now lands nowhere near it must lose that
-// vibe value, not merely fail to have it rewritten: a stale tag is confidently
-// wrong, invisible on disk, and there is nothing the connector could check it
-// against. The three multi-valued tags therefore appear with no values when the
-// track has none, which is the instruction to remove them.
+// Naming all eleven is what makes a relabel a REPLACE rather than a merge. A
+// track that used to land in `melancholy` and now lands nowhere near it must
+// lose that vibe value, not merely fail to have it rewritten: a stale tag is
+// confidently wrong, invisible on disk, and there is nothing the connector could
+// check it against. The four multi-valued tags therefore appear with no values
+// when the track has none, which is the instruction to remove them.
 //
 // The seven all-or-nothing tags always carry a value. The connector treats a
 // track missing any one of them as unlabelled, so writing six of seven is worse
 // than writing none.
 //
-// Ten names is also the blast radius. Nothing else in the file is named here, so
-// nothing else can be touched.
+// `vibe` and `vibe_near` are mutually exclusive by construction: a track that
+// belongs somewhere has no near miss to report, and one that belongs nowhere has
+// no membership. Both are named on every write so neither can survive a relabel
+// that should have cleared it.
+//
+// Eleven names is also the blast radius. Nothing else in the file is named here,
+// so nothing else can be touched.
 func tagsFor(l llm.Label) map[string][]string {
 	return map[string][]string{
 		TagEnergy:       {strconv.Itoa(l.Energy)},
@@ -123,6 +134,7 @@ func tagsFor(l llm.Label) map[string][]string {
 		TagMood:         mood.TagValues(l.Moods, MoodTermCap),
 		TagTime:         llm.KnownTimes(l.Times),
 		TagVibe:         vibesFor(l),
+		TagVibeNear:     nearVibeFor(l),
 	}
 }
 

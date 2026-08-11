@@ -260,6 +260,30 @@ func vibesFor(label llm.Label) []string {
 	return out
 }
 
+// nearVibeFor names the region a track just missed, and only when it missed all
+// of them.
+//
+// Measured on a 9,195 track library, 3,230 tracks belonged to no region, and the
+// median one of those sat 2.2 outside the nearest boundary while the median gap
+// between any two tracks in the library was 17.7. Calling that "no home" was
+// wrong: those tracks share a neighbourhood with assigned ones and are excluded
+// by an edge, not by being unusual.
+//
+// It stays a separate tag rather than a widened radius so the distinction
+// survives. A playlist can fall back to near matches when a region is thin and
+// still prefer real members when it is not, which is a choice the caller can
+// only make if the two are told apart.
+func nearVibeFor(label llm.Label) []string {
+	if len(mood.VibesFor(label.Point(), MaxVibes)) > 0 {
+		return nil
+	}
+	m, ok := mood.NearestFor(label.Point())
+	if !ok {
+		return nil
+	}
+	return []string{m.Vibe}
+}
+
 // project estimates a batch's cost for the pre-flight cap check.
 func (r *Runner) project(n int) (float64, error) {
 	// Assume no cache hit, which overestimates the input side and therefore fails

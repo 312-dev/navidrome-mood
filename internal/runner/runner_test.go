@@ -479,6 +479,17 @@ func betweenRegions(id string) llm.Label {
 	return l
 }
 
+// Just past `late night`: enough energy to clear its radius, not enough to reach
+// anything else. This is what most unassigned tracks look like on a real
+// library, as against the extreme corner betweenRegions occupies.
+func justOutsideLateNight(id string) llm.Label {
+	l := label(id, "moody", "restless")
+	l.Energy, l.Valence, l.Intensity = 60, 40, 38
+	l.Acousticness, l.Density = 35, 45
+	l.Tempo, l.Vocal = "mid", "sung"
+	return l
+}
+
 // All ten for a track that lands in a region, because the connector reads the
 // five axes plus tempo and vocal all-or-nothing: six of those seven written is a
 // track it discards whole. This is the assertion that would have caught the
@@ -494,9 +505,18 @@ func TestEveryTagIsWrittenForALabelInARegion(t *testing.T) {
 	}
 	got := tg.onFile("/m/a.flac")
 	for _, name := range TagNames {
+		// A track inside a region has no near miss to report, so `vibe_near`
+		// is correctly absent here. The two are mutually exclusive.
+		if name == TagVibeNear {
+			continue
+		}
 		if len(got[name]) == 0 {
 			t.Errorf("tag %q was not written", name)
 		}
+	}
+	if _, ok := got[TagVibeNear]; ok {
+		t.Errorf("%s written for a track that belongs to a region: %v",
+			TagVibeNear, got[TagVibeNear])
 	}
 	want := map[string]string{
 		TagEnergy: "80", TagValence: "30", TagIntensity: "84",
@@ -510,17 +530,25 @@ func TestEveryTagIsWrittenForALabelInARegion(t *testing.T) {
 	}
 }
 
-// Nine for a track in no region, and nine is the right answer rather than a
-// partial write: `vibe` names the regions a track belongs to, and belonging to
-// none is a real answer that no value can express. An empty Vorbis comment is not
-// the same as an absent one - it would hand the connector a `vibe` key with
-// nothing in it to reason about - so the tag is left off the file entirely. The
-// other nine are unaffected, and the track stays reachable by axis range and by
-// vocabulary term.
-func TestATrackInNoRegionGetsNineTagsAndNoVibeKey(t *testing.T) {
+// Nine for a track that is near nothing at all, and nine is the right answer
+// rather than a partial write: `vibe` names the regions a track belongs to, and
+// belonging to none is a real answer that no value can express. An empty Vorbis
+// comment is not the same as an absent one - it would hand the connector a
+// `vibe` key with nothing in it to reason about - so the tag is left off the
+// file entirely. `vibe_near` goes the same way for the same reason.
+//
+// This fixture is a genuine outlier, far enough out that not even the widened
+// FringeFactor radius reaches it, so both region tags are absent. That is the
+// rarer case: measured on a real library, only about one track in twenty that
+// belongs to no region is also beyond every fringe. The common case is covered
+// by TestATrackJustOutsideAllRegionsGetsANearVibe.
+func TestATrackNearNoRegionGetsNineTagsAndNoRegionKeys(t *testing.T) {
 	l := betweenRegions("a")
 	if got := mood.VibesFor(l.Point(), MaxVibes); len(got) != 0 {
 		t.Fatalf("fixture is meant to be in no region but landed in %v", got)
+	}
+	if m, ok := mood.NearestFor(l.Point()); ok {
+		t.Fatalf("fixture is meant to be beyond every fringe but is near %v", m.Vibe)
 	}
 
 	p := &stubProvider{labels: []llm.Label{l}}
@@ -533,11 +561,15 @@ func TestATrackInNoRegionGetsNineTagsAndNoVibeKey(t *testing.T) {
 	if _, ok := got[TagVibe]; ok {
 		t.Fatalf("file carries a %s tag for a track in no region: %v", TagVibe, got[TagVibe])
 	}
-	if len(got) != len(TagNames)-1 {
-		t.Fatalf("file carries %d tags, want %d: %v", len(got), len(TagNames)-1, got)
+	if _, ok := got[TagVibeNear]; ok {
+		t.Fatalf("file carries a %s tag for a track near no region: %v",
+			TagVibeNear, got[TagVibeNear])
+	}
+	if len(got) != len(TagNames)-2 {
+		t.Fatalf("file carries %d tags, want %d: %v", len(got), len(TagNames)-2, got)
 	}
 	for _, name := range TagNames {
-		if name == TagVibe {
+		if name == TagVibe || name == TagVibeNear {
 			continue
 		}
 		if len(got[name]) == 0 {
@@ -638,6 +670,35 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// The case the fringe tier exists for: a track that belongs to no region but
+// sits just beyond one, which on a real library is roughly nineteen out of every
+// twenty unassigned tracks. It gets `vibe_near` and still no `vibe`, because
+// being close to a region is not being in it and the two tags are what keeps
+// that difference legible to the connector.
+func TestATrackJustOutsideAllRegionsGetsANearVibe(t *testing.T) {
+	l := justOutsideLateNight("a")
+	if got := mood.VibesFor(l.Point(), MaxVibes); len(got) != 0 {
+		t.Fatalf("fixture is meant to be in no region but landed in %v", got)
+	}
+
+	p := &stubProvider{labels: []llm.Label{l}}
+	tg := newTagger()
+	r := newRunner(p, tg, Options{})
+	if _, err := r.Process([]Item{item("a", "/m/a.flac")}); err != nil {
+		t.Fatal(err)
+	}
+	got := tg.onFile("/m/a.flac")
+	if _, ok := got[TagVibe]; ok {
+		t.Errorf("%s written for a track in no region: %v", TagVibe, got[TagVibe])
+	}
+	if len(got[TagVibeNear]) != 1 {
+		t.Fatalf("%s = %v, want exactly one region", TagVibeNear, got[TagVibeNear])
+	}
+	if got[TagVibeNear][0] != "late night" {
+		t.Errorf("%s = %v, want [late night]", TagVibeNear, got[TagVibeNear])
+	}
+}
+
 // The tag names are the seam with navidrome-mcp/src/moodtags.ts. A rename on
 // either side leaves files that look labelled and are invisible to every
 // playlist the connector builds.
@@ -645,6 +706,7 @@ func TestTagNamesMatchTheConnectorContract(t *testing.T) {
 	want := []string{
 		"mood", "ndmood_energy", "ndmood_valence", "ndmood_intensity", "ndmood_acousticness",
 		"ndmood_density", "ndmood_tempo", "ndmood_vocal", "ndmood_time", "vibe",
+		"vibe_near",
 	}
 	got := append([]string(nil), TagNames...)
 	sort.Strings(got)

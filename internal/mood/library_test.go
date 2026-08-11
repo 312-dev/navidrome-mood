@@ -220,3 +220,53 @@ func TestEveryRegionIsUsableOnALibrary(t *testing.T) {
 			"vibe tag describing a minority of the collection", got*100)
 	}
 }
+
+// The fringe widens a radius, never a constraint. `focus` means instrumental,
+// and a sung track sitting on its centre is not a near miss for it - it is a
+// different kind of track. Widening without keeping this would put vocal tracks
+// back into the one region built to exclude them, which is the failure the
+// constraint exists to prevent.
+func TestFringeStillHonoursHardConstraints(t *testing.T) {
+	centre := Regions["focus"].Centre
+	sung := Point{Axes: centre, Tempo: "mid", Vocal: "sung"}
+	if m, ok := NearestFor(sung); ok && m.Vibe == "focus" {
+		t.Fatal("a sung track on the centre of focus was offered it as a near match")
+	}
+	inst := Point{Axes: centre, Tempo: "mid", Vocal: "instrumental"}
+	if m, ok := NearestFor(inst); !ok || m.Vibe != "focus" {
+		t.Fatalf("NearestFor(instrumental at focus centre) = %v, %v; want focus", m, ok)
+	}
+}
+
+// A point beyond every widened radius has no near region, and saying so is the
+// point: if everything were assigned, membership would carry no information.
+func TestFringeStillLeavesGenuineOutliersUnassigned(t *testing.T) {
+	corner := Point{
+		Axes:  Axes{Energy: 100, Valence: 100, Intensity: 0, Acousticness: 100, Density: 0},
+		Tempo: "frantic", Vocal: "rapped",
+	}
+	if m, ok := NearestFor(corner); ok {
+		t.Fatalf("an extreme outlier was assigned to %v", m.Vibe)
+	}
+}
+
+// Between the two radii is exactly the band the fringe adds: outside the region
+// proper, inside the widened one.
+func TestFringeCoversTheBandJustOutsideARegion(t *testing.T) {
+	r := Regions["late night"]
+	p := Point{Axes: r.Centre, Tempo: "mid", Vocal: "sung"}
+	p.Energy += 20 // ~8.6 away: past a radius of 7.5, inside 11.25
+
+	d := Distance(p.Axes, r.Centre)
+	if d <= r.Radius || d > r.Radius*FringeFactor {
+		t.Fatalf("fixture sits at %.1f, not between %.1f and %.1f",
+			d, r.Radius, r.Radius*FringeFactor)
+	}
+	if got := VibesFor(p, 3); len(got) != 0 {
+		t.Fatalf("VibesFor = %v, want no membership", got)
+	}
+	m, ok := NearestFor(p)
+	if !ok || m.Vibe != "late night" {
+		t.Fatalf("NearestFor = %v, %v; want late night", m, ok)
+	}
+}
