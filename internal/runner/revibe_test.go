@@ -76,20 +76,27 @@ func TestRevibeRemovesAVibeTheTrackNoLongerQualifiesFor(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing was written, so the stale vibes are still on the file")
 	}
-	if len(wrote) != 1 {
-		t.Fatalf("the write named %d tags, want only %s: recomputation must not "+
-			"touch a tag it did not produce", len(wrote), TagVibe)
+	if len(wrote) != 2 {
+		t.Fatalf("the write named %d tags, want only %s and %s: recomputation must "+
+			"not touch a tag it did not produce", len(wrote), TagVibe, TagVibeNear)
 	}
 	if v, ok := wrote[TagVibe]; !ok || len(v) != 0 {
 		t.Fatalf("wrote %v for %s, want the name present with no values, which is "+
 			"what removes the tag", wrote, TagVibe)
+	}
+	// This fixture is stranded beyond every fringe too, so the near tag is named
+	// and empty for the same reason the membership one is.
+	if v, ok := wrote[TagVibeNear]; !ok || len(v) != 0 {
+		t.Fatalf("wrote %v for %s, want the name present with no values", wrote, TagVibeNear)
 	}
 }
 
 // The nine tags this does not own must come back untouched. Recomputation runs
 // over a whole library at once, so a bug that widened its blast radius would
 // take the model's verdict with it and there would be nothing to restore from.
-func TestRevibeNamesOnlyTheVibeTag(t *testing.T) {
+// The two region tags are excluded because both are computed here from the axes
+// rather than supplied by the model.
+func TestRevibeNamesOnlyTheRegionTags(t *testing.T) {
 	p := centreOf("melancholy")
 	tagger := newTagger()
 	before := labelledTags(p)
@@ -99,7 +106,7 @@ func TestRevibeNamesOnlyTheVibeTag(t *testing.T) {
 
 	wrote := tagger.written["a.flac"]
 	for _, name := range TagNames {
-		if name == TagVibe {
+		if name == TagVibe || name == TagVibeNear {
 			continue
 		}
 		if _, ok := wrote[name]; ok {

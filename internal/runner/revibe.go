@@ -34,15 +34,18 @@ type RevibeOutcome struct {
 // with no model, no network and no spend. Moving a radius, adding a region or
 // renaming one is then a rebuild and one free pass.
 //
-// It writes ONE tag. The other nine are the model's verdict and this has no
-// opinion about them; naming only `vibe` in the write is what guarantees a
-// recomputation cannot disturb a label it did not produce.
+// It writes TWO tags, `vibe` and `vibe_near`, and both for the same reason:
+// each is computed here from the axes rather than supplied by the model. The
+// other nine are the model's verdict and this has no opinion about them, so
+// naming only the two region tags is what guarantees a recomputation cannot
+// disturb a label it did not produce.
 //
 // A track that now belongs to no region has `vibe` named with no values, which
 // removes it. That case is the whole point rather than an edge: tightening a
 // radius is precisely the change that should take a tag away, and a vibe left
 // behind because the write only ever added values would be a stale claim with
-// nothing to check it against.
+// nothing to check it against. `vibe_near` is named on every write for the same
+// reason, and the two can never both carry a value.
 func Revibe(items []Item, tagger Tagger, dryRun bool) RevibeOutcome {
 	out := RevibeOutcome{Requested: len(items), Errors: map[string]string{}}
 
@@ -57,7 +60,19 @@ func Revibe(items []Item, tagger Tagger, dryRun bool) RevibeOutcome {
 		for _, m := range mood.VibesFor(point, MaxVibes) {
 			want = append(want, m.Vibe)
 		}
-		if sameValues(it.Tags[TagVibe], want) {
+		// The near miss is recomputed with the membership and written in the
+		// same instruction. Recomputing one without the other leaves the pair
+		// disagreeing: a track that gains a region keeps the `vibe_near` it no
+		// longer has, and a track that loses one keeps no record of what it is
+		// now closest to. Both tags are always named, so a value that should be
+		// gone is removed rather than merely not rewritten.
+		var near []string
+		if len(want) == 0 {
+			if m, ok := mood.NearestFor(point); ok {
+				near = []string{m.Vibe}
+			}
+		}
+		if sameValues(it.Tags[TagVibe], want) && sameValues(it.Tags[TagVibeNear], near) {
 			out.Unchanged++
 			continue
 		}
@@ -71,7 +86,10 @@ func Revibe(items []Item, tagger Tagger, dryRun bool) RevibeOutcome {
 			}
 			continue
 		}
-		if _, err := tagger.WriteTags(it.Path, map[string][]string{TagVibe: want}); err != nil {
+		if _, err := tagger.WriteTags(it.Path, map[string][]string{
+			TagVibe:     want,
+			TagVibeNear: near,
+		}); err != nil {
 			out.Errors[it.Path] = err.Error()
 			continue
 		}
