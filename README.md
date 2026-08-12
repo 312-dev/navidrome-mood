@@ -64,10 +64,10 @@ sqlite3 -readonly <DataFolder>/navidrome.db \
 been told about. A tag in a file whose name is not declared is dropped by the
 scanner: it never reaches the database and never appears in the API. There is no
 wildcard and no catch-all, and no error is logged. The plugin will report that it
-wrote ten tags to every track and Navidrome will show you nothing, which looks
+wrote eleven tags to every track and Navidrome will show you nothing, which looks
 exactly like the plugin not working.
 
-Of the ten, only `mood` is built in. The other nine have to be declared in
+Of the eleven, only `mood` is built in. The other ten have to be declared in
 Navidrome's own config file. In TOML:
 
 ```toml
@@ -108,6 +108,11 @@ Split = [";", "/", ","]
 [Tags.vibe]
 Aliases = ["vibe"]
 Split = [";", "/", ","]
+
+# At most one value, declared like `vibe` so the two read back the same way.
+[Tags.vibe_near]
+Aliases = ["vibe_near"]
+Split = [";", "/", ","]
 ```
 
 Three things about that block are worth understanding rather than copying:
@@ -145,7 +150,7 @@ config took. If only `mood` is there, the other nine are being discarded and the
 config is wrong or was not reloaded. `GET /api/song/<id>` shows the `tags` object
 for one track, which is the same answer one level down.
 
-## The ten tags
+## The eleven tags
 
 | Tag | Value | Multi-valued |
 |---|---|---|
@@ -159,6 +164,7 @@ for one track, which is the same answer one level down.
 | `ndmood_vocal` | `instrumental` `sung` `rapped` `mixed` | no |
 | `ndmood_time` | time-of-day slots it suits | yes |
 | `vibe` | named regions of mood space it falls in | yes |
+| `vibe_near` | the region it came closest to, when it falls in none | no |
 
 `ndmood_tempo` is how fast the track *feels*, not its BPM. A slow, sparse track at
 140 BPM feels `slow`.
@@ -171,9 +177,24 @@ The vibe regions are `wind down`, `slow morning`, `focus`, `background`,
 `melancholy`, `heavy`, `dinner` and `party`. These are not chosen by the model.
 Each region is an area of mood space with a centre, a radius and optional
 constraints, and the plugin computes which ones a track's coordinates land in.
-A track in no region is a normal outcome, not a failure, and about a third of a
-library lands that way. Those tracks are still reachable by axis range and by
-mood word.
+A track in no region is a normal outcome, not a failure. On a 9,195-track
+library a third of it landed that way, and the reason turned out to be less
+interesting than it looked: the median such track sat 2.2 outside the nearest
+boundary, against a median distance of 17.7 between any two tracks in the
+library. They were not unusual music between the regions, they were ordinary
+music just past an edge.
+
+`vibe_near` is what that measurement bought. A track in no region reports the
+one region it came closest to, provided it is within 1.5 times that region's
+radius, and carries nothing otherwise. It never overlaps with `vibe`: a track
+has one or the other or neither. On the same library that takes region coverage
+from 64.9% to 94.4% while leaving 515 genuine outliers in neither tag, which is
+the point. Widening to 2.0 reaches every track and is where membership stops
+carrying information.
+
+Query `vibe` when a playlist should only hold tracks that are really in the
+region, and `vibe` or `vibe_near` together when it needs the volume. Tracks in
+neither are still reachable by axis range and by mood word.
 
 The radii are fitted so each region holds roughly 8% of a real collection.
 That basis matters: real music does not spread evenly through the coordinate
@@ -305,7 +326,7 @@ Some more useful shapes:
 
 The operators that apply here are `is`, `isNot`, `gt`, `lt`, `contains`,
 `notContains`, `startsWith`, `endsWith`, `isMissing` and `isPresent`, combined
-under `all` or `any`. **`inTheRange` does not work on tag fields**, and all ten
+under `all` or `any`. **`inTheRange` does not work on tag fields**, and all eleven
 of these are tag fields: Navidrome rejects it there because a tag can hold
 several values and the two bounds could be satisfied by different ones. Write a
 band as a `gt` and an `lt` under the same `all`, as above.
@@ -354,9 +375,9 @@ pass has to do anyway.
 
 A track is finished when it carries all seven of the values that are read
 all-or-nothing - the five axes, `ndmood_tempo` and `ndmood_vocal` - plus at least one
-`mood` word. `ndmood_time` and `vibe` are not required, because a track in no vibe
-region is a normal outcome and requiring one would send a large slice of any
-library back through paid labelling every pass. That is the same rule the
+`mood` word. `ndmood_time`, `vibe` and `vibe_near` are not required, because a
+track in no vibe region is a normal outcome and requiring one would send a large
+slice of any library back through paid labelling every pass. That is the same rule the
 navidrome-mcp connector applies when it reads these tags back, and the two have
 to agree or a track one of them calls labelled is invisible to the other.
 
@@ -370,10 +391,11 @@ the default. Turning `skipTagged` off relabels those tracks, and doing so
 replaces whatever wrote them. This plugin adds `mood`; it does not own it.
 
 There is no version marker anywhere, and a change to what the tags *contain*
-needs none. A future eleventh tag would be absent from every track written
-today, and that absence is what would mark them as needing another pass, which
-is exactly how today's ten-tag tracks are told apart from an older build's
-`mood`-only ones.
+needs none. Absence does the work: a track written before `vibe_near` existed
+simply does not carry it, the same way today's tracks are told apart from an
+older build's `mood`-only ones. A new tag only forces a pass if it is required,
+and requiring one is the decision to make carefully rather than the default.
+`vibe_near` is not required, and `revibe` fills it in for free.
 
 A change to what the tags are *called* is the case that absence cannot express,
 because a renamed tag is indistinguishable from a missing one. So the old names
@@ -405,7 +427,7 @@ a labelling run judging and billing a library it has already judged, and
   goes unnoticed for days. Watching a labelling pass means watching the log.
 - **Whether third-party clients surface these tags is untested.** Navidrome
   exposes declared tags through its API, but no Subsonic client and no Music
-  Assistant instance has been checked against these nine custom names.
+  Assistant instance has been checked against these ten custom names.
 
 ## What has actually been observed
 

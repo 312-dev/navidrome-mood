@@ -9,17 +9,17 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
-// The ten tag names written into every labelled file.
+// The eleven tag names written into every labelled file.
 //
 // This list is the entire seam between this plugin and the navidrome-mcp
-// connector, which holds the same ten names in src/moodtags.ts and reads them
-// back. Renaming one here alone leaves files that look labelled on disk and are
+// connector, which holds these names in src/moodtags.ts and must be kept in sync.
+// Renaming one here alone leaves files that look labelled on disk and are
 // invisible to every playlist the connector builds, with no error anywhere.
 //
 // Navidrome splits every tag value on `,;/`, so no value written under these may
 // contain one. mood.Validate is the gate for the vocabulary and the region names.
 //
-// Nine of the ten do not exist until the user declares them in Navidrome's config
+// Ten of the eleven do not exist until the user declares them in Navidrome's config
 // under a Tags map; only `mood` is built in. An undeclared tag is dropped by the
 // scanner with no error, so writing one is necessary but not sufficient. Verified
 // 2026-08-09 against Navidrome 0.63.2.

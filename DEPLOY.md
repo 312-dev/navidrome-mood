@@ -10,14 +10,16 @@ ssh session gets, so every command below exports it.
 
 Verified on 2026-08-10.
 
-- **The library is labelled.** All 9,195 live tracks carry the full ten tags.
+- **The library is labelled.** All 9,195 live tracks carry the full set of tags
+  that version wrote, ten of them at the time.
   Navidrome reports 9,310, and the difference is 115 records whose files are not
   on disk: `?missing=true` returns exactly those 115, and every one of them has
   zero plays. A labelling pass cannot help them, since this plugin walks the
   filesystem and they are not in it. Clearing them is a `Scanner.PurgeMissing`
   setting, not a plugin concern.
-- The nine custom tags are declared in `/data/navidrome.toml` and Navidrome has
-  loaded them. Confirmed by the only test that can fail: an undeclared field is
+- The custom tags are declared in `/data/navidrome.toml` and Navidrome has
+  loaded them. There were nine at that point; 0.6.0 adds `vibe_near` and the
+  block has to grow to ten before that tag is visible to anything. Confirmed by the only test that can fail: an undeclared field is
   ignored and returns the whole library, a declared one filters. `?vibe=workout`
   and `?moodenergy=88` returned 0 of 9,310 while `?notarealtag=zzz` returned
   9,310, before any track was labelled.
@@ -80,8 +82,42 @@ track still carrying values under the old names as needing migration rather
 than a fresh judgment, so neither will re-label those tracks or bill for them,
 but neither renames anything either; only `migrate-tags` does.
 
+### 0.6.0: a track in no region now reports the one it nearly made
+
+New tag, `vibe_near`. A track that falls in no vibe region carries the region it
+came closest to, when it is within 1.5 times that region's radius. On this
+library that moves region coverage from 64.9% to 94.4% and leaves 515 tracks in
+neither tag.
+
+Nothing already in the files becomes wrong, and no track needs relabelling:
+`vibe_near` is not part of the completeness rule, so a `revibe` pass fills it in
+for nothing. `revibe` now writes both region tags in the same pass.
+
+1. Add the new tag to the `Tags` block in `/data/navidrome.toml`, alongside the
+   existing `vibe` entry and declared the same way:
+
+   ```toml
+   [Tags.vibe_near]
+   Aliases = ["vibe_near"]
+   Split = [";", "/", ","]
+   ```
+
+   Until this lands the plugin writes the tag and Navidrome drops it silently,
+   which looks exactly like the plugin not writing it.
+2. Copy the package over and reload, as in steps 1 to 3 of the first install.
+   The permission set has not changed, so the plugin should stay enabled; check
+   anyway, because a disabled plugin logs nothing at all.
+3. Set **Label my library** to `revibe`, watch for the summary line, then set it
+   back to `off`. No provider is contacted and nothing is billed.
+4. Run a full library rescan so Navidrome's `tag` table picks up the new name.
+5. Redeploy `navidrome-mcp`. It reads `vibe_near` from its own snapshot version
+   9 onward and exposes it as the `mood_vibes_near` filter; an older build
+   ignores the tag, which costs the new coverage but breaks nothing. The version
+   bump discards the cached index on first load, so the connector re-syncs
+   itself and no extra step is needed.
+
 **Redeploy `navidrome-mcp` at the same time.** The connector keeps its own
-copy of these ten names in `src/moodtags.ts`. A connector still reading the
+copy of these names in `src/moodtags.ts`. A connector still reading the
 old names against files that now carry the new ones sees an entirely
 unlabelled library, the same failure a mismatched `internal/runner/tags.go`
 would cause on this side.

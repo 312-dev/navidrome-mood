@@ -21,23 +21,23 @@ import (
 	"github.com/312-dev/navidrome-mood/internal/mood"
 )
 
-// Tagger is the file-writing seam. It is generic over tag names because nine of
-// the ten tags carry the geometry the connector actually reads; a mood-only seam
-// could only ever write the tenth.
+// Tagger is the file-writing seam. It is generic over tag names because ten of
+// the eleven tags carry the geometry the connector actually reads; a mood-only
+// seam could only ever write the eleventh.
 type Tagger interface {
 	// WriteTags replaces each named tag with the given values and reports what
 	// strategy the write used. A name mapped to no values removes that tag; a name
-	// absent from the map is left untouched. A write always names all ten, so a
+	// absent from the map is left untouched. A write always names all eleven, so a
 	// relabel replaces the plugin's whole set rather than merging into it.
 	WriteTags(path string, tags map[string][]string) (string, error)
 }
 
 // Item is one track to label, paired with the file to tag and whatever that file
-// already carries under the plugin's ten names.
+// already carries under the plugin's eleven names.
 //
 // Tags comes from the same comment block the metadata in Track was parsed out
 // of, so deciding what to skip costs nothing beyond the read the caller had to
-// do anyway. A nil map means a file carrying none of the ten, which is a track
+// do anyway. A nil map means a file carrying none of the eleven, which is a track
 // nothing has ever labelled.
 type Item struct {
 	Track llm.Track

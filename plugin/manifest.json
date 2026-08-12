@@ -1,8 +1,8 @@
 {
   "name": "navidrome-mood",
   "author": "312.dev",
-  "version": "0.5.0",
-  "description": "Judges every track with an LLM and writes ten mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, and the vibe regions it falls in. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
+  "version": "0.6.0",
+  "description": "Judges every track with an LLM and writes eleven mood tags into the audio files: five 0-100 axes (energy, valence, intensity, acousticness, density), how fast it feels, whether it is sung, two to four mood words, the times of day it suits, the vibe regions it falls in, and for a track in none of them, the region it came closest to. Navidrome smart playlists and any Subsonic client can then filter on feeling instead of on genre.",
   "website": "https://github.com/312-dev/navidrome-mood",
   "permissions": {
     "http": {
@@ -62,7 +62,7 @@
         "run": {
           "type": "string",
           "title": "Label my library",
-          "description": "Start with 'sample': it labels 20 tracks from across your library for a few cents so you can see whether you like the results. 'everything' labels every track that is not already carrying a full set of mood tags. 'revibe' and 'migrate-tags' both call no provider and cost nothing: 'revibe' re-derives the vibe tag from the five axes already in your files, which is what applies a change to the vibe regions without paying to judge every track again, and 'migrate-tags' rewrites tags written by a version before 0.5.0 under their current names. Work is queued and survives restarts, and setting this back to 'off' does not cancel work already queued.",
+          "description": "Start with 'sample': it labels 20 tracks from across your library for a few cents so you can see whether you like the results. 'everything' labels every track that is not already carrying a full set of mood tags. 'revibe' and 'migrate-tags' both call no provider and cost nothing: 'revibe' re-derives the vibe and vibe_near tags from the five axes already in your files, which is what applies a change to the vibe regions without paying to judge every track again, and 'migrate-tags' rewrites tags written by a version before 0.5.0 under their current names. Work is queued and survives restarts, and setting this back to 'off' does not cancel work already queued.",
           "enum": [
             "off",
             "sample",
@@ -81,7 +81,7 @@
         "skipTagged": {
           "type": "boolean",
           "title": "Leave existing mood tags alone",
-          "description": "Skips any track that already has a mood, including ones written by Picard, beets or by hand. Turn it off to send those through labelling, which also replaces whatever wrote them. Tracks already carrying the full set of ten tags are skipped either way, because redoing them would cost money and change nothing.",
+          "description": "Skips any track that already has a mood, including ones written by Picard, beets or by hand. Turn it off to send those through labelling, which also replaces whatever wrote them. Tracks already carrying a complete label are skipped either way, because redoing them would cost money and change nothing.",
           "default": true
         },
         "autoSync": {

@@ -627,7 +627,7 @@ func TestRelabellingLeavesNoStaleValues(t *testing.T) {
 	}
 }
 
-// The plugin owns ten names and must not reach past them. Anything else in the
+// The plugin owns eleven names and must not reach past them. Anything else in the
 // file belongs to whatever wrote it.
 func TestRelabellingLeavesForeignTagsAlone(t *testing.T) {
 	tg := newTagger()
